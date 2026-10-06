@@ -5783,6 +5783,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cpal",
+ "embed-resource",
  "futures",
  "gpui",
  "gpui-component",

@@ -1,6 +1,6 @@
 [package]
 name = "oxidecord"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
@@ -36,6 +36,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
 ] }
+
+[build-dependencies]
+embed-resource = "3"
 
 [patch.crates-io]
 twilight-http = { git = "https://github.com/s1099/twilight", branch = "main" }

@@ -28,13 +28,13 @@ won't know that generator so either update CMake, or build through Ninja with
 - [x] Image rendering
 - [x] Themes
 - [x] Updater
-- [ ] App icon
+- [x] App icon
 - [ ] Status changes
 - [x] Video playback
 - [x] Voice calls
 - [ ] Screenshare and video calls
 - [ ] Caching
-- [ ] Markdown rendering
+- [x] Markdown rendering
 - [ ] Custom themes
 - [ ] Cross platform autoupdater (only Windows is works right now)
 

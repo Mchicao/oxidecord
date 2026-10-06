@@ -1,4 +1,5 @@
-//! Bakes the JSON theme files in `themes/` into the binary.
+//! Bakes the JSON theme files in `themes/` into the binary, and on Windows the
+//! app icon into the exe's resources.
 //!
 //! The list is generated rather than written by hand so dropping a new file
 //! into `themes/` is all it takes to ship another preset. `include_str!` pulls
@@ -40,4 +41,13 @@ fn main() {
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("preset_themes.rs");
     fs::write(&out, generated).expect("failed to write generated preset theme list");
+
+    // Checked on the target rather than with `cfg!`, which would describe the
+    // host the build script runs on.
+    if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows") {
+        println!("cargo::rerun-if-changed=assets/icon.ico");
+        embed_resource::compile("assets/icon.rc", embed_resource::NONE)
+            .manifest_optional()
+            .expect("failed to embed the app icon");
+    }
 }

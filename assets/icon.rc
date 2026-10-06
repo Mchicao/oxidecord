@@ -1,0 +1,2 @@
+// gpui loads the window and taskbar icon from resource id 1 of the running exe.
+1 ICON "icon.ico"
