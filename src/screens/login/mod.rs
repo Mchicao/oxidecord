@@ -4,10 +4,12 @@ mod webview;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+// Token login is hidden for now; its imports come back with it.
 use gpui_component::{
-    ActiveTheme as _, h_flex,
-    input::{Input, InputState},
-    tab::{Tab, TabBar},
+    ActiveTheme as _,
+    h_flex,
+    // input::{Input, InputState},
+    // tab::{Tab, TabBar},
     v_flex,
 };
 
@@ -18,30 +20,32 @@ use crate::ui::window_controls::WindowControls;
 
 use webview::LoginWebview;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoginMethod {
-    Discord,
-    Token,
-}
+// Token login is hidden: only "Login with Discord" is offered. The method
+// selector and token pane are kept commented out so they can be restored.
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// enum LoginMethod {
+//     Discord,
+//     Token,
+// }
 
 pub struct LoginScreen {
     app: WeakEntity<AppScreen>,
-    method: LoginMethod,
-    token_input: Entity<InputState>,
+    // method: LoginMethod,
+    // token_input: Entity<InputState>,
 }
 
 impl LoginScreen {
-    pub fn new(app: WeakEntity<AppScreen>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let token_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Paste your token")
-                .masked(true)
-        });
+    pub fn new(app: WeakEntity<AppScreen>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
+        // let token_input = cx.new(|cx| {
+        //     InputState::new(window, cx)
+        //         .placeholder("Paste your token")
+        //         .masked(true)
+        // });
 
         Self {
             app,
-            method: LoginMethod::Discord,
-            token_input,
+            // method: LoginMethod::Discord,
+            // token_input,
         }
     }
 
@@ -57,28 +61,28 @@ impl LoginScreen {
         )
     }
 
-    fn render_method_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_index = match self.method {
-            LoginMethod::Discord => 0,
-            LoginMethod::Token => 1,
-        };
-
-        let entity = cx.entity();
-        TabBar::new("login-tabs")
-            .segmented()
-            .selected_index(active_index)
-            .child(Tab::new().label("Login with Discord"))
-            .child(Tab::new().label("Login with Token"))
-            .on_click(move |&selected_index, _window, cx| {
-                entity.update(cx, |this, cx| {
-                    this.method = match selected_index {
-                        0 => LoginMethod::Discord,
-                        _ => LoginMethod::Token,
-                    };
-                    cx.notify();
-                });
-            })
-    }
+    // fn render_method_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    //     let active_index = match self.method {
+    //         LoginMethod::Discord => 0,
+    //         LoginMethod::Token => 1,
+    //     };
+    //
+    //     let entity = cx.entity();
+    //     TabBar::new("login-tabs")
+    //         .segmented()
+    //         .selected_index(active_index)
+    //         .child(Tab::new().label("Login with Discord"))
+    //         .child(Tab::new().label("Login with Token"))
+    //         .on_click(move |&selected_index, _window, cx| {
+    //             entity.update(cx, |this, cx| {
+    //                 this.method = match selected_index {
+    //                     0 => LoginMethod::Discord,
+    //                     _ => LoginMethod::Token,
+    //                 };
+    //                 cx.notify();
+    //             });
+    //         })
+    // }
 
     fn render_discord_pane(&self) -> impl IntoElement {
         let app = self.app.clone();
@@ -114,24 +118,24 @@ impl LoginScreen {
         )
     }
 
-    fn render_token_pane(&self, cx: &Context<Self>) -> impl IntoElement {
-        v_flex()
-            .w_full()
-            .gap(px(16.))
-            .child(
-                v_flex()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("DISCORD TOKEN"),
-                    )
-                    .child(Input::new(&self.token_input).mask_toggle().cleanable(true)),
-            )
-            .child(Button::new("btn-token-login").label("Log In").primary())
-    }
+    // fn render_token_pane(&self, cx: &Context<Self>) -> impl IntoElement {
+    //     v_flex()
+    //         .w_full()
+    //         .gap(px(16.))
+    //         .child(
+    //             v_flex()
+    //                 .gap(px(6.))
+    //                 .child(
+    //                     div()
+    //                         .text_size(px(12.))
+    //                         .font_weight(FontWeight::SEMIBOLD)
+    //                         .text_color(cx.theme().muted_foreground)
+    //                         .child("DISCORD TOKEN"),
+    //                 )
+    //                 .child(Input::new(&self.token_input).mask_toggle().cleanable(true)),
+    //         )
+    //         .child(Button::new("btn-token-login").label("Log In").primary())
+    // }
 }
 
 impl Render for LoginScreen {
@@ -147,11 +151,12 @@ impl Render for LoginScreen {
             .p(px(32.))
             .gap(px(24.))
             .child(self.render_logo(cx))
-            .child(v_flex().items_center().child(self.render_method_tabs(cx)))
-            .child(match self.method {
-                LoginMethod::Discord => self.render_discord_pane().into_any_element(),
-                LoginMethod::Token => self.render_token_pane(cx).into_any_element(),
-            });
+            // .child(v_flex().items_center().child(self.render_method_tabs(cx)))
+            // .child(match self.method {
+            //     LoginMethod::Discord => self.render_discord_pane().into_any_element(),
+            //     LoginMethod::Token => self.render_token_pane(cx).into_any_element(),
+            // });
+            .child(self.render_discord_pane());
 
         v_flex()
             .size_full()

@@ -9,7 +9,7 @@ use twilight_model::id::{
 use crate::discord::{self, Channel};
 use crate::screens::home::channels::build_channel_groups;
 use crate::screens::home::folders::build_rail_entries;
-use crate::screens::home::{HomeScreen, View};
+use crate::screens::home::{HomeScreen, SessionExpired, View};
 
 impl HomeScreen {
     pub(in crate::screens::home) fn load_guilds(
@@ -29,6 +29,11 @@ impl HomeScreen {
                         if let Some(guild_id) = first {
                             this.select_guild(guild_id, window, cx);
                         }
+                    }
+                    // A rejected token is forgotten by the request itself.
+                    Err(_) if discord::load_token().is_none() => {
+                        cx.emit(SessionExpired);
+                        return;
                     }
                     Err(err) => this.error = Some(err),
                 }

@@ -3,14 +3,19 @@
 use gpui::*;
 
 use crate::discord;
-use crate::screens::home::HomeScreen;
+use crate::screens::home::{HomeScreen, SessionExpired};
 use crate::screens::login::LoginScreen;
 use crate::ui::dialogs;
 
 /// Which screen the app is currently showing.
 enum Route {
     Login(Entity<LoginScreen>),
-    Home(Entity<HomeScreen>),
+    /// Holds the subscription that sends the user back to login if the
+    /// session turns out to have expired.
+    Home {
+        screen: Entity<HomeScreen>,
+        _expired: Subscription,
+    },
 }
 
 /// Top-level view for the main window. Owns the current screen and swaps
@@ -23,10 +28,9 @@ pub struct AppScreen {
 impl AppScreen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let route = if discord::load_token().is_some() {
-            Route::Home(cx.new(|cx| HomeScreen::new(window, cx)))
+            Self::home_route(window, cx)
         } else {
-            let app = cx.weak_entity();
-            Route::Login(cx.new(|cx| LoginScreen::new(app, window, cx)))
+            Self::login_route(window, cx)
         };
 
         Self { route }
@@ -34,9 +38,29 @@ impl AppScreen {
 
     /// Switch to the home screen once a token is available.
     pub fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let home = cx.new(|cx| HomeScreen::new(window, cx));
-        self.route = Route::Home(home);
+        self.route = Self::home_route(window, cx);
         cx.notify();
+    }
+
+    fn home_route(window: &mut Window, cx: &mut Context<Self>) -> Route {
+        let home = cx.new(|cx| HomeScreen::new(window, cx));
+        let subscription = cx.subscribe_in(
+            &home,
+            window,
+            |this, _home, _: &SessionExpired, window, cx| {
+                this.route = Self::login_route(window, cx);
+                cx.notify();
+            },
+        );
+        Route::Home {
+            screen: home,
+            _expired: subscription,
+        }
+    }
+
+    fn login_route(window: &mut Window, cx: &mut Context<Self>) -> Route {
+        let app = cx.weak_entity();
+        Route::Login(cx.new(|cx| LoginScreen::new(app, window, cx)))
     }
 }
 
@@ -44,7 +68,7 @@ impl Render for AppScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let screen = match &self.route {
             Route::Login(view) => view.clone().into_any_element(),
-            Route::Home(view) => view.clone().into_any_element(),
+            Route::Home { screen: view, .. } => view.clone().into_any_element(),
         };
 
         // Every screen sits under the same modal layer, so a dialog opened

@@ -52,6 +52,25 @@ pub fn save_token(token: &str) -> keyring::Result<()> {
     Ok(())
 }
 
+/// Forgets `expired` after Discord rejected it, so the next launch goes
+/// straight to login. Only if it's still the stored token: a request sent with
+/// an old token can come back after the user has already logged in again.
+pub(super) fn forget_token(expired: &str) {
+    if load_token().as_deref() != Some(expired) {
+        return;
+    }
+    match keyring_entry().and_then(|entry| entry.delete_credential()) {
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(err) => eprintln!("failed to remove token from the credential store: {err}"),
+    }
+    if let Ok(mut cache) = TOKEN_CACHE.write() {
+        *cache = Some(None);
+    }
+    if let Ok(mut client) = CLIENT.lock() {
+        *client = None;
+    }
+}
+
 /// The shared client for the stored token. Must be called on the Tokio
 /// runtime, since building the client spawns its ratelimiter there.
 pub(super) fn client() -> anyhow::Result<Arc<HttpClient>> {
