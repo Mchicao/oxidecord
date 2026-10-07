@@ -48,7 +48,7 @@ pub struct VoiceServerInfo {
 pub(in crate::discord) struct RawVoiceState {
     user_id: Id<UserMarker>,
     #[serde(default)]
-    guild_id: Option<Id<GuildMarker>>,
+    pub(in crate::discord) guild_id: Option<Id<GuildMarker>>,
     #[serde(default)]
     channel_id: Option<Id<ChannelMarker>>,
     #[serde(default)]
@@ -69,11 +69,14 @@ pub(in crate::discord) struct RawVoiceState {
 struct RawMember {
     #[serde(default)]
     user: Option<RawVoiceUser>,
+    #[serde(default)]
+    nick: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct RawVoiceUser {
-    id: Id<UserMarker>,
+    #[serde(default)]
+    id: Option<Id<UserMarker>>,
     #[serde(default)]
     username: Option<String>,
     #[serde(default)]
@@ -99,17 +102,28 @@ pub(in crate::discord) fn convert_voice_state(
     raw: RawVoiceState,
     guild_id: Option<Id<GuildMarker>>,
 ) -> VoiceUserState {
+    let nick = raw
+        .member
+        .as_ref()
+        .and_then(|member| member.nick.clone())
+        .filter(|n| !n.is_empty());
     let user = raw.member.and_then(|member| member.user);
-    let name = user.as_ref().and_then(|user| {
-        user.global_name
-            .clone()
-            .or_else(|| user.username.clone())
-            .filter(|name| !name.is_empty())
+    let name = nick.or_else(|| {
+        user.as_ref().and_then(|user| {
+            user.global_name
+                .clone()
+                .or_else(|| user.username.clone())
+                .filter(|name| !name.is_empty())
+        })
     });
+    let user_id = user
+        .as_ref()
+        .and_then(|user| user.id)
+        .unwrap_or(raw.user_id);
     let avatar_url = user.as_ref().and_then(|user| {
         user.avatar
             .as_ref()
-            .map(|hash| cdn::small_avatar_url(user.id.get(), hash))
+            .map(|hash| cdn::small_avatar_url(user_id.get(), hash))
     });
 
     VoiceUserState {

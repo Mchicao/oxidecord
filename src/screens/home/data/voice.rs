@@ -202,13 +202,16 @@ impl HomeScreen {
         // Gateway dispatches don't always repeat the member, so a state that
         // arrives without one keeps the name and avatar already known.
         let known = self.voice_states.get(&user_id);
+        let profile = self.profile_cache.get(&user_id);
         let state = discord::VoiceUserState {
             name: state
                 .name
-                .or_else(|| known.and_then(|state| state.name.clone())),
+                .or_else(|| known.and_then(|state| state.name.clone()))
+                .or_else(|| profile.map(|p| p.name.clone())),
             avatar_url: state
                 .avatar_url
-                .or_else(|| known.and_then(|state| state.avatar_url.clone())),
+                .or_else(|| known.and_then(|state| state.avatar_url.clone()))
+                .or_else(|| profile.and_then(|p| p.avatar_url.clone())),
             ..state
         };
 
@@ -398,10 +401,16 @@ impl HomeScreen {
                     name: current
                         .map(|user| user.name.clone())
                         .or_else(|| state.name.clone())
+                        .or_else(|| self.profile_cache.get(&state.user_id).map(|p| p.name.clone()))
                         .unwrap_or_else(|| "Unknown".into()),
                     avatar_url: current
                         .and_then(|user| user.avatar_url.clone())
-                        .or_else(|| state.avatar_url.clone()),
+                        .or_else(|| state.avatar_url.clone())
+                        .or_else(|| {
+                            self.profile_cache
+                                .get(&state.user_id)
+                                .and_then(|p| p.avatar_url.clone())
+                        }),
                     muted: state.self_mute || state.mute,
                     deafened: state.self_deaf || state.deaf,
                     speaking: self.voice_speaking.contains(&state.user_id),
