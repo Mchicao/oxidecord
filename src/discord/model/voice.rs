@@ -4,13 +4,15 @@
 //! models, because a DM call's `VOICE_SERVER_UPDATE` carries no guild id and
 //! twilight's model requires one.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 
-use super::cdn;
+use super::guild::RawMember;
 
 /// One user's presence in a voice channel, as the gateway last reported it.
 #[derive(Clone)]
@@ -48,7 +50,7 @@ pub struct VoiceServerInfo {
 pub(in crate::discord) struct RawVoiceState {
     user_id: Id<UserMarker>,
     #[serde(default)]
-    pub(in crate::discord) guild_id: Option<Id<GuildMarker>>,
+    guild_id: Option<Id<GuildMarker>>,
     #[serde(default)]
     channel_id: Option<Id<ChannelMarker>>,
     #[serde(default)]
@@ -66,26 +68,6 @@ pub(in crate::discord) struct RawVoiceState {
 }
 
 #[derive(Deserialize)]
-struct RawMember {
-    #[serde(default)]
-    user: Option<RawVoiceUser>,
-    #[serde(default)]
-    nick: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RawVoiceUser {
-    #[serde(default)]
-    id: Option<Id<UserMarker>>,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    global_name: Option<String>,
-    #[serde(default)]
-    avatar: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub(in crate::discord) struct RawVoiceServer {
     #[serde(default)]
     endpoint: Option<String>,
@@ -96,35 +78,44 @@ pub(in crate::discord) struct RawVoiceServer {
     channel_id: Option<Id<ChannelMarker>>,
 }
 
-/// `guild_id` stands in for dispatches that carry the guild outside the voice
-/// state itself, as `GUILD_CREATE`'s bundled states do.
-pub(in crate::discord) fn convert_voice_state(
+/// A `VOICE_STATE_UPDATE`, which carries its own member when it has one.
+pub(in crate::discord) fn convert_voice_state(raw: RawVoiceState) -> VoiceUserState {
+    convert(raw, None, None)
+}
+
+/// Every voice state bundled into a guild object (`READY`'s guilds,
+/// `GUILD_CREATE`). Those states carry neither the guild id nor a member, so
+/// the guild comes from the object and the name from its `members`, when the
+/// user is among them.
+pub(in crate::discord) fn convert_guild_voice_states<'a>(
+    guild_id: Id<GuildMarker>,
+    states: Vec<RawVoiceState>,
+    members: impl IntoIterator<Item = &'a RawMember>,
+) -> Vec<VoiceUserState> {
+    if states.is_empty() {
+        return Vec::new();
+    }
+    let members: HashMap<_, _> = members
+        .into_iter()
+        .filter_map(|member| Some((member.user_id()?, member)))
+        .collect();
+    states
+        .into_iter()
+        .map(|state| {
+            let member = members.get(&state.user_id).copied();
+            convert(state, Some(guild_id), member)
+        })
+        .collect()
+}
+
+fn convert(
     raw: RawVoiceState,
     guild_id: Option<Id<GuildMarker>>,
+    member: Option<&RawMember>,
 ) -> VoiceUserState {
-    let nick = raw
-        .member
-        .as_ref()
-        .and_then(|member| member.nick.clone())
-        .filter(|n| !n.is_empty());
-    let user = raw.member.and_then(|member| member.user);
-    let name = nick.or_else(|| {
-        user.as_ref().and_then(|user| {
-            user.global_name
-                .clone()
-                .or_else(|| user.username.clone())
-                .filter(|name| !name.is_empty())
-        })
-    });
-    let user_id = user
-        .as_ref()
-        .and_then(|user| user.id)
-        .unwrap_or(raw.user_id);
-    let avatar_url = user.as_ref().and_then(|user| {
-        user.avatar
-            .as_ref()
-            .map(|hash| cdn::small_avatar_url(user_id.get(), hash))
-    });
+    let member = raw.member.as_ref().or(member);
+    let name = member.and_then(RawMember::display_name);
+    let avatar_url = member.and_then(RawMember::avatar_url);
 
     VoiceUserState {
         user_id: raw.user_id,

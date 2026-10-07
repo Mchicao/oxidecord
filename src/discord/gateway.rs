@@ -7,7 +7,8 @@
 //! identify, resume — since that happens as messages are polled.
 
 use futures::StreamExt as _;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use twilight_gateway::{Intents, Message as ShardMessage, MessageSender, Shard, ShardId};
 use twilight_model::id::{
@@ -18,8 +19,9 @@ use twilight_model::id::{
 use crate::platform::runtime;
 
 use super::model::{
-    Message, RawRole, RawVoiceServer, RawVoiceState, Role, VoiceServerInfo, VoiceUserState,
-    convert_message, convert_role, convert_voice_server, convert_voice_state,
+    Message, RawMember, RawRole, RawVoiceServer, RawVoiceState, Role, VoiceServerInfo,
+    VoiceUserState, convert_guild_voice_states, convert_message, convert_role,
+    convert_voice_server, convert_voice_state,
 };
 
 /// A message received live over the gateway, tagged with the channel it
@@ -31,18 +33,25 @@ pub struct IncomingMessage {
 
 /// The live events the app acts on.
 pub enum GatewayEvent {
-    /// The session is up. Carries the signed-in user, which voice connections
-    /// need to identify themselves.
+    /// A new session is up. Carries the signed-in user, which voice
+    /// connections need to identify themselves, and everyone in voice across
+    /// its guilds — the whole of it, replacing whatever an earlier session
+    /// knew, since anyone could have left while the app was disconnected.
     Ready {
         user_id: Id<UserMarker>,
+        voice_states: Vec<VoiceUserState>,
     },
     Message(IncomingMessage),
     /// A message was edited. Carries the whole message as it now stands.
     MessageUpdate(IncomingMessage),
-    /// Someone joined, left, or changed their state in a voice channel. Also
-    /// synthesized for the states bundled into `GUILD_CREATE`, so the app
-    /// learns who was already in a channel before it connected.
+    /// Someone joined, left, or changed their state in a voice channel.
     VoiceState(VoiceUserState),
+    /// Everyone in voice in one guild, replacing what was known of it: from
+    /// `GUILD_CREATE`, or empty from `GUILD_DELETE`.
+    GuildVoiceStates {
+        guild_id: Id<GuildMarker>,
+        states: Vec<VoiceUserState>,
+    },
     /// The voice server assigned to a call the user is joining.
     VoiceServer(VoiceServerInfo),
     /// Every role in a guild, from `READY` or `GUILD_CREATE`. Replaces what
@@ -125,7 +134,7 @@ struct ReadyPayload {
     /// A user session's guilds arrive whole in `READY`; a bot's only as ids,
     /// with the rest following in `GUILD_CREATE`.
     #[serde(default)]
-    guilds: Vec<GuildRolesPayload>,
+    guilds: Vec<GatewayGuild>,
     /// The signed-in user's member in each guild, in the same order as
     /// `guilds`, when the session asked for deduplicated payloads. Otherwise
     /// they arrive in each guild's own `members`.
@@ -133,57 +142,27 @@ struct ReadyPayload {
     merged_members: Vec<Vec<RawMember>>,
 }
 
+/// A guild as `READY` and `GUILD_CREATE` send it, of which only what's needed
+/// is read: who is already sitting in its voice channels, what a role mention
+/// should be called, and which roles the user holds. An unavailable guild
+/// arrives with none of these.
 #[derive(Deserialize)]
-struct GuildRolesPayload {
+struct GatewayGuild {
     id: Id<GuildMarker>,
+    /// Lenient because it sits inside `READY`: one state Discord shapes
+    /// unexpectedly shouldn't cost the whole session its roles.
+    #[serde(default, deserialize_with = "skip_invalid")]
+    voice_states: Vec<RawVoiceState>,
     #[serde(default)]
     roles: Vec<RawRole>,
     #[serde(default)]
     members: Vec<RawMember>,
-    #[serde(default)]
-    voice_states: Vec<RawVoiceState>,
 }
 
+/// `GUILD_DELETE`: the user left the guild, or it went unavailable.
 #[derive(Deserialize)]
-struct ReadySupplementalPayload {
-    #[serde(default)]
-    guilds: Vec<SupplementalGuild>,
-    #[serde(default)]
-    voice_states: Vec<RawVoiceState>,
-}
-
-#[derive(Deserialize)]
-struct SupplementalGuild {
+struct GuildDeletePayload {
     id: Id<GuildMarker>,
-    #[serde(default)]
-    voice_states: Vec<RawVoiceState>,
-}
-
-#[derive(Deserialize)]
-struct PassiveUpdatePayload {
-    guild_id: Id<GuildMarker>,
-    #[serde(default)]
-    voice_states: Vec<RawVoiceState>,
-    #[serde(default)]
-    updated_voice_states: Vec<RawVoiceState>,
-}
-
-/// A guild member, of which only the roles are read. Where the user's id is
-/// depends on the payload: a nested user in most, a bare `user_id` in
-/// `merged_members`.
-#[derive(Deserialize)]
-struct RawMember {
-    #[serde(default)]
-    user: Option<MemberUser>,
-    #[serde(default)]
-    user_id: Option<Id<UserMarker>>,
-    #[serde(default)]
-    roles: Vec<Id<RoleMarker>>,
-}
-
-#[derive(Deserialize)]
-struct MemberUser {
-    id: Id<UserMarker>,
 }
 
 /// `GUILD_MEMBER_UPDATE`.
@@ -212,18 +191,19 @@ struct ReadyUser {
     id: Id<UserMarker>,
 }
 
-/// `GUILD_CREATE`, of which only the voice states, roles and members are read
-/// here: who is already sitting in each of the guild's voice channels, what a
-/// role mention should be called, and which roles the user holds.
-#[derive(Deserialize)]
-struct GuildCreatePayload {
-    id: Id<GuildMarker>,
-    #[serde(default)]
-    voice_states: Vec<RawVoiceState>,
-    #[serde(default)]
-    roles: Vec<RawRole>,
-    #[serde(default)]
-    members: Vec<RawMember>,
+/// Deserializes a list item by item, dropping the items that don't fit `T`
+/// instead of failing the whole payload. The items are borrowed from the frame
+/// first, so the skipping costs no copies.
+fn skip_invalid<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let items = Vec::<&'de RawValue>::deserialize(deserializer)?;
+    Ok(items
+        .into_iter()
+        .filter_map(|item| serde_json::from_str(item.get()).ok())
+        .collect())
 }
 
 /// Opens a gateway websocket connection and invokes `on_event` for every
@@ -285,51 +265,28 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
     match name {
         "READY" => serde_json::from_str::<ReadyPayload>(data)
             .map(|ready| {
-                let mut events = vec![GatewayEvent::Ready {
-                    user_id: ready.user.id,
-                }];
+                let mut voice_states = Vec::new();
+                let mut roles = Vec::new();
                 let mut merged = ready.merged_members.into_iter();
                 for guild in ready.guilds {
-                    let members = merged.next().unwrap_or_default();
-                    events.extend(member_roles(guild.id, members));
-                    events.extend(guild.voice_states.into_iter().map(|state| {
-                        GatewayEvent::VoiceState(convert_voice_state(state, Some(guild.id)))
-                    }));
-                    events.extend(guild_roles(guild.id, guild.roles, guild.members));
+                    let merged = merged.next().unwrap_or_default();
+                    voice_states.extend(convert_guild_voice_states(
+                        guild.id,
+                        guild.voice_states,
+                        guild.members.iter().chain(&merged),
+                    ));
+                    roles.extend(member_roles(guild.id, merged));
+                    roles.extend(guild_roles(guild.id, guild.roles, guild.members));
                 }
-                events
+                // `Ready` goes first: the member roles that follow are only
+                // kept for the signed-in user, whom it names.
+                let ready = GatewayEvent::Ready {
+                    user_id: ready.user.id,
+                    voice_states,
+                };
+                std::iter::once(ready).chain(roles).collect()
             })
             .unwrap_or_default(),
-        "READY_SUPPLEMENTAL" => serde_json::from_str::<ReadySupplementalPayload>(data)
-            .map(|supp| {
-                let mut events = Vec::new();
-                for guild in supp.guilds {
-                    events.extend(guild.voice_states.into_iter().map(|state| {
-                        GatewayEvent::VoiceState(convert_voice_state(state, Some(guild.id)))
-                    }));
-                }
-                events.extend(supp.voice_states.into_iter().map(|state| {
-                    let guild_id = state.guild_id;
-                    GatewayEvent::VoiceState(convert_voice_state(state, guild_id))
-                }));
-                events
-            })
-            .unwrap_or_default(),
-        "PASSIVE_UPDATE_V1" | "PASSIVE_UPDATE_V2" => {
-            serde_json::from_str::<PassiveUpdatePayload>(data)
-                .map(|update| {
-                    let guild_id = update.guild_id;
-                    update
-                        .voice_states
-                        .into_iter()
-                        .chain(update.updated_voice_states)
-                        .map(|state| {
-                            GatewayEvent::VoiceState(convert_voice_state(state, Some(guild_id)))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
         "MESSAGE_CREATE" => serde_json::from_str::<twilight_model::channel::Message>(data)
             .map(|message| {
                 vec![GatewayEvent::Message(IncomingMessage {
@@ -350,22 +307,32 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
             })
             .unwrap_or_default(),
         "VOICE_STATE_UPDATE" => serde_json::from_str::<RawVoiceState>(data)
-            .map(|state| vec![GatewayEvent::VoiceState(convert_voice_state(state, None))])
+            .map(|state| vec![GatewayEvent::VoiceState(convert_voice_state(state))])
             .unwrap_or_default(),
         "VOICE_SERVER_UPDATE" => serde_json::from_str::<RawVoiceServer>(data)
             .map(|server| vec![GatewayEvent::VoiceServer(convert_voice_server(server))])
             .unwrap_or_default(),
-        "GUILD_CREATE" => serde_json::from_str::<GuildCreatePayload>(data)
+        "GUILD_CREATE" => serde_json::from_str::<GatewayGuild>(data)
             .map(|guild| {
-                let roles = guild_roles(guild.id, guild.roles, guild.members);
-                guild
-                    .voice_states
-                    .into_iter()
-                    .map(|state| {
-                        GatewayEvent::VoiceState(convert_voice_state(state, Some(guild.id)))
-                    })
-                    .chain(roles)
+                let voice = GatewayEvent::GuildVoiceStates {
+                    guild_id: guild.id,
+                    states: convert_guild_voice_states(
+                        guild.id,
+                        guild.voice_states,
+                        &guild.members,
+                    ),
+                };
+                std::iter::once(voice)
+                    .chain(guild_roles(guild.id, guild.roles, guild.members))
                     .collect()
+            })
+            .unwrap_or_default(),
+        "GUILD_DELETE" => serde_json::from_str::<GuildDeletePayload>(data)
+            .map(|guild| {
+                vec![GatewayEvent::GuildVoiceStates {
+                    guild_id: guild.id,
+                    states: Vec::new(),
+                }]
             })
             .unwrap_or_default(),
         "GUILD_ROLE_CREATE" | "GUILD_ROLE_UPDATE" => {
@@ -399,7 +366,7 @@ fn member_roles(
     members: Vec<RawMember>,
 ) -> impl Iterator<Item = GatewayEvent> {
     members.into_iter().filter_map(move |member| {
-        let user_id = member.user.map(|user| user.id).or(member.user_id)?;
+        let user_id = member.user_id()?;
         Some(GatewayEvent::MemberRoles {
             guild_id,
             user_id,
@@ -428,76 +395,146 @@ fn guild_roles(
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_voice_states_from_ready() {
-        let json = r#"{
-            "user": {"id": "123"},
-            "guilds": [{
-                "id": "456",
-                "voice_states": [{
-                    "user_id": "789",
-                    "channel_id": "101112",
-                    "member": {
-                        "nick": "NickName",
-                        "user": {"username": "username1"}
-                    }
-                }]
-            }]
-        }"#;
-        let raw = RawValue::from_string(json.to_string()).unwrap();
-        let events = dispatch("READY", &raw);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            GatewayEvent::VoiceState(vs)
-                if vs.user_id == Id::new(789) && vs.name.as_deref() == Some("NickName")
-        )));
+    fn dispatch_json(name: &str, json: &str) -> Vec<GatewayEvent> {
+        dispatch(name, &RawValue::from_string(json.to_owned()).unwrap())
+    }
+
+    fn ready_voice_states(events: &[GatewayEvent]) -> &[VoiceUserState] {
+        match events.first() {
+            Some(GatewayEvent::Ready { voice_states, .. }) => voice_states,
+            _ => panic!("READY should lead with a Ready event"),
+        }
     }
 
     #[test]
-    fn parses_voice_states_from_ready_supplemental() {
-        let json = r#"{
-            "guilds": [{
-                "id": "456",
-                "voice_states": [{
-                    "user_id": "789",
-                    "channel_id": "101112"
+    fn ready_names_voice_states_from_guild_members() {
+        let events = dispatch_json(
+            "READY",
+            r#"{
+                "user": {"id": "1"},
+                "guilds": [{
+                    "id": "10",
+                    "voice_states": [
+                        {"user_id": "2", "channel_id": "100", "self_mute": true},
+                        {"user_id": "3", "channel_id": "100"}
+                    ],
+                    "members": [{
+                        "nick": "Nick",
+                        "user": {"id": "2", "username": "user2", "global_name": "Global"}
+                    }]
                 }]
-            }],
-            "voice_states": [{
-                "guild_id": "456",
-                "user_id": "999",
-                "channel_id": "101112"
-            }]
-        }"#;
-        let raw = RawValue::from_string(json.to_string()).unwrap();
-        let events = dispatch("READY_SUPPLEMENTAL", &raw);
-        let count = events
-            .iter()
-            .filter(|e| matches!(e, GatewayEvent::VoiceState(_)))
-            .count();
-        assert_eq!(count, 2);
+            }"#,
+        );
+
+        let states = ready_voice_states(&events);
+        assert_eq!(states.len(), 2);
+        assert!(
+            states
+                .iter()
+                .all(|state| state.guild_id == Some(Id::new(10)))
+        );
+        let named = states.iter().find(|s| s.user_id == Id::new(2)).unwrap();
+        assert_eq!(named.name.as_deref(), Some("Nick"));
+        assert!(named.self_mute);
+        // Not among the members: left for the app to name.
+        let unnamed = states.iter().find(|s| s.user_id == Id::new(3)).unwrap();
+        assert_eq!(unnamed.name, None);
     }
 
     #[test]
-    fn parses_voice_states_from_passive_update() {
-        let json = r#"{
-            "guild_id": "456",
-            "voice_states": [{
-                "user_id": "789",
-                "channel_id": "101112"
-            }],
-            "updated_voice_states": [{
-                "user_id": "999",
-                "channel_id": "101112"
-            }]
-        }"#;
-        let raw = RawValue::from_string(json.to_string()).unwrap();
-        let events = dispatch("PASSIVE_UPDATE_V2", &raw);
-        let count = events
-            .iter()
-            .filter(|e| matches!(e, GatewayEvent::VoiceState(_)))
-            .count();
-        assert_eq!(count, 2);
+    fn ready_names_voice_states_from_merged_members() {
+        let events = dispatch_json(
+            "READY",
+            r#"{
+                "user": {"id": "1"},
+                "guilds": [{
+                    "id": "10",
+                    "voice_states": [{"user_id": "2", "channel_id": "100"}]
+                }],
+                "merged_members": [[{"user_id": "2", "nick": "Merged"}]]
+            }"#,
+        );
+
+        let states = ready_voice_states(&events);
+        assert_eq!(states[0].name.as_deref(), Some("Merged"));
+    }
+
+    #[test]
+    fn ready_skips_a_malformed_voice_state_and_keeps_the_rest() {
+        let events = dispatch_json(
+            "READY",
+            r#"{
+                "user": {"id": "1"},
+                "guilds": [{
+                    "id": "10",
+                    "voice_states": [
+                        {"channel_id": "100"},
+                        {"user_id": "2", "channel_id": "100"}
+                    ],
+                    "roles": [{"id": "20", "name": "role"}]
+                }]
+            }"#,
+        );
+
+        assert_eq!(ready_voice_states(&events).len(), 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, GatewayEvent::GuildRoles { .. }))
+        );
+    }
+
+    #[test]
+    fn guild_create_replaces_the_guilds_voice_states() {
+        let events = dispatch_json(
+            "GUILD_CREATE",
+            r#"{
+                "id": "10",
+                "voice_states": [{"user_id": "2", "channel_id": "100"}],
+                "members": [{
+                    "nick": "",
+                    "user": {"id": "2", "username": "user2", "global_name": "Global"}
+                }]
+            }"#,
+        );
+
+        let Some(GatewayEvent::GuildVoiceStates { guild_id, states }) = events.first() else {
+            panic!("GUILD_CREATE should yield the guild's voice states");
+        };
+        assert_eq!(*guild_id, Id::new(10));
+        // A cleared nickname falls through to the global name.
+        assert_eq!(states[0].name.as_deref(), Some("Global"));
+    }
+
+    #[test]
+    fn guild_delete_clears_the_guilds_voice_states() {
+        let events = dispatch_json("GUILD_DELETE", r#"{"id": "10", "unavailable": true}"#);
+
+        assert!(matches!(
+            events.as_slice(),
+            [GatewayEvent::GuildVoiceStates { guild_id, states }]
+                if *guild_id == Id::new(10) && states.is_empty()
+        ));
+    }
+
+    #[test]
+    fn voice_state_update_reads_its_own_member() {
+        let events = dispatch_json(
+            "VOICE_STATE_UPDATE",
+            r#"{
+                "user_id": "2",
+                "guild_id": "10",
+                "channel_id": "100",
+                "session_id": "abc",
+                "member": {"user": {"id": "2", "username": "user2", "avatar": "hash"}}
+            }"#,
+        );
+
+        let [GatewayEvent::VoiceState(state)] = events.as_slice() else {
+            panic!("VOICE_STATE_UPDATE should yield one voice state");
+        };
+        assert_eq!(state.guild_id, Some(Id::new(10)));
+        assert_eq!(state.name.as_deref(), Some("user2"));
+        assert!(state.avatar_url.is_some());
     }
 }
-
