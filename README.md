@@ -4,6 +4,11 @@ WIP Cross platform native discord client built with rust gpui, focused on being 
 
 ![Oxidecord screenshot](assets/screenshot.png)
 
+![Oxidecord resource usage](assets/resources.png)
+
+> [!NOTE]
+> Oxidecord isn't feature complete yet, so these numbers will likely change as more features land.
+
 ## Download
 
 Download `oxidecord.exe` from the [latest release](https://github.com/s1099/oxidecord/releases/latest), save it anywhere you like, and run it.
