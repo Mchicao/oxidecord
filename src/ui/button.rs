@@ -266,12 +266,14 @@ impl Variant {
                 level: Some(Level::Raised),
                 finish: Finish::Subtle,
             },
+            // Solid, like Discord's: a translucent tint read as washed out in
+            // every theme, and these buttons (log out, hang up) should be loud.
             Variant::Danger => Look {
-                bg: theme.danger.opacity(if dark { 0.2 } else { 0.1 }),
-                hover: theme.danger.opacity(if dark { 0.3 } else { 0.2 }),
-                fg: theme.danger,
+                bg: theme.danger,
+                hover: theme.danger.opacity(0.9),
+                fg: theme.danger_foreground,
                 border: None,
-                level: Some(Level::Raised),
+                level: Some(Level::RaisedStrong),
                 finish: Finish::Subtle,
             },
             Variant::Ghost => Look {
