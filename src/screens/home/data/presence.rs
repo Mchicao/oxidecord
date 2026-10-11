@@ -1,6 +1,8 @@
-//! The user's own online status, picked from the account panel.
+//! Online statuses: the user's own, picked from the account panel, and
+//! everyone else's as the gateway reports them.
 
 use gpui::*;
+use twilight_model::id::{Id, marker::UserMarker};
 
 use crate::discord;
 use crate::screens::home::HomeScreen;
@@ -37,5 +39,21 @@ impl HomeScreen {
         if let Some(gateway) = &self.gateway {
             gateway.update_presence(status);
         }
+    }
+
+    /// The status to show for a user. The gateway never reports the user's
+    /// own presence, so theirs is the one they picked; anyone it hasn't
+    /// mentioned is offline.
+    pub(in crate::screens::home) fn user_status(
+        &self,
+        user_id: Id<UserMarker>,
+    ) -> discord::PresenceStatus {
+        if Some(user_id) == self.self_user_id {
+            return self.presence_status.unwrap_or_default();
+        }
+        self.user_presences
+            .get(&user_id)
+            .copied()
+            .unwrap_or(discord::PresenceStatus::Invisible)
     }
 }

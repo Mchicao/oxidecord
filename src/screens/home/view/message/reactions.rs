@@ -42,14 +42,16 @@ impl HomeScreen {
                     .px(px(6.))
                     .border_1()
                     .border_color(if reaction.me {
-                        theme.primary.opacity(0.6)
+                        theme.primary
                     } else {
-                        theme.border
+                        theme.secondary
                     })
+                    // Discord's chips stand out from the page: a solid tint for
+                    // your own reaction, a lifted gray for everyone else's.
                     .bg(if reaction.me {
-                        theme.primary.opacity(0.15)
+                        theme.primary.opacity(0.3)
                     } else {
-                        theme.background
+                        theme.secondary
                     })
                     // Chips are clickable, so they sit up on the page like any
                     // other control.
@@ -64,9 +66,9 @@ impl HomeScreen {
                     .cursor_pointer()
                     .hover(|this| {
                         this.bg(if reaction.me {
-                            theme.primary.opacity(0.25)
+                            theme.primary.opacity(0.4)
                         } else {
-                            theme.muted
+                            theme.secondary_hover
                         })
                     })
                     .active(|this| this.shadow(Vec::new()))
@@ -85,11 +87,12 @@ impl HomeScreen {
                     })
                     .child(
                         div()
-                            .text_xs()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if reaction.me {
-                                theme.primary
+                                theme.primary.blend(theme.foreground.opacity(0.35))
                             } else {
-                                theme.muted_foreground
+                                theme.foreground.opacity(0.85)
                             })
                             .child(reaction.count.to_string()),
                     )

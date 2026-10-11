@@ -102,6 +102,23 @@ impl HomeScreen {
                 // The read states follow, whole, and anything kept from an
                 // earlier session could be stale.
                 self.unreads = Default::default();
+                // Likewise the presences, and anyone who went offline in the
+                // meantime won't be among them.
+                self.user_presences.clear();
+                cx.notify();
+            }
+            discord::GatewayEvent::Presences(presences) => {
+                // Most of these are guild members nobody here is looking at,
+                // so only a change to someone in the DM list redraws.
+                let mut changed = false;
+                for (user_id, status) in presences {
+                    if self.user_presences.insert(user_id, status) != Some(status) {
+                        changed |= self.dms.iter().any(|dm| dm.recipient_id == Some(user_id));
+                    }
+                }
+                if changed {
+                    cx.notify();
+                }
             }
             discord::GatewayEvent::StatusSettings(status) => {
                 self.presence_status = Some(status);

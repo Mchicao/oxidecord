@@ -87,7 +87,7 @@
 | Feature | Status | Notes |
 |---|---|---|
 | Custom status | Missing | |
-| Showing other users' presence (status dots) | Missing | `PRESENCE_UPDATE` is dropped |
+| Showing other users' presence (status dots) | Partial | Shown in the DM list and profile cards; the member list doesn't exist yet |
 | Rich presence and activities (games, Spotify, streaming) | Missing | |
 | Detecting and broadcasting your own game activity | Missing | |
 | Idle detection (auto-idle when AFK) | Missing | |

@@ -211,6 +211,10 @@ pub struct HomeScreen {
     /// fetch resolves; the account panel shows online meanwhile, and nothing
     /// is sent to the gateway until it's known.
     pub(super) presence_status: Option<discord::PresenceStatus>,
+    /// Other users' statuses, as far as the gateway has said. Anyone missing
+    /// is shown offline: Discord only sends the presences of friends and
+    /// people who share a guild, and never sends offline ones up front.
+    pub(super) user_presences: HashMap<Id<UserMarker>, discord::PresenceStatus>,
     /// Folders the user has opened, by folder id. Folders start collapsed.
     pub(super) expanded_folders: HashSet<i64>,
     pub(super) selected_guild: Option<Id<GuildMarker>>,
@@ -426,6 +430,7 @@ impl HomeScreen {
             rail_entries: Vec::new(),
             guild_folders: None,
             presence_status: None,
+            user_presences: HashMap::new(),
             expanded_folders: HashSet::new(),
             current_user: None,
             selected_guild: None,

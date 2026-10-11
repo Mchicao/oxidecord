@@ -6,6 +6,7 @@ use gpui_component::{ActiveTheme as _, h_flex, skeleton::Skeleton, v_flex};
 
 use crate::discord::DirectMessage;
 use crate::screens::home::HomeScreen;
+use crate::screens::home::view::user_panel::status_indicator;
 use crate::screens::home::view::{avatar, unread_pill};
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
@@ -25,10 +26,34 @@ impl HomeScreen {
         let is_selected = self.selected_channel == Some(channel_id);
         let unread = self.unreads.is_unread(channel_id);
 
-        let avatar = avatar(dm.name.clone(), dm.avatar_url.clone(), px(32.));
+        // Only a 1:1 conversation has one person whose status to show.
+        let status = dm.recipient_id.map(|user_id| self.user_status(user_id));
+        let group: SharedString = format!("dm-{channel_id}").into();
+        let backdrop = if is_selected {
+            theme.sidebar_accent
+        } else {
+            theme.sidebar
+        };
+        let avatar =
+            div()
+                .relative()
+                .flex_shrink_0()
+                .child(avatar(dm.name.clone(), dm.avatar_url.clone(), px(32.)))
+                .when_some(status, |this, status| {
+                    this.child(div().absolute().right(px(-3.)).bottom(px(-3.)).child(
+                        status_indicator(
+                            status,
+                            px(10.),
+                            backdrop,
+                            Some((group.clone(), theme.sidebar_accent)),
+                            theme,
+                        ),
+                    ))
+                });
 
         h_flex()
             .id(("dm", channel_id.get()))
+            .group(group)
             .relative()
             .px_2()
             .py(px(6.))

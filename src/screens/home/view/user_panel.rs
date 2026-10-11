@@ -39,11 +39,18 @@ impl HomeScreen {
                     .absolute()
                     .right(px(-3.))
                     .bottom(px(-3.))
-                    .child(status_indicator(status, px(10.), theme.sidebar, theme)),
+                    .child(status_indicator(
+                        status,
+                        px(10.),
+                        theme.sidebar,
+                        Some(("account-status".into(), theme.secondary_hover)),
+                        theme,
+                    )),
             );
 
         let screen = cx.entity().downgrade();
         let account = AccountButton::new("account-status")
+            .group("account-status")
             .flex_1()
             .min_w_0()
             .child(avatar)
@@ -75,7 +82,7 @@ impl HomeScreen {
                             let theme = cx.theme();
                             h_flex()
                                 .gap_2()
-                                .child(status_indicator(option, px(10.), popover, theme))
+                                .child(status_indicator(option, px(10.), popover, None, theme))
                                 .child(v_flex().child(status_label(option)).children(
                                     status_description(option).map(|description| {
                                         div()
@@ -179,12 +186,14 @@ fn status_description(status: PresenceStatus) -> Option<&'static str> {
 
 /// A status as Discord draws it, so it reads without colour: a dot for
 /// online, a crescent for idle, a dash for do not disturb, a ring for
-/// invisible. `backdrop` is what it sits on: it's ringed in it, so it cuts
-/// cleanly into an avatar, and the cut-outs are painted in it.
-fn status_indicator(
+/// invisible or offline. `backdrop` is what it sits on: it's ringed in it, so
+/// it cuts cleanly into an avatar, and the cut-outs are painted in it.
+/// `hover` names the group whose hover changes that backdrop, and to what.
+pub(super) fn status_indicator(
     status: PresenceStatus,
     size: Pixels,
     backdrop: Hsla,
+    hover: Option<(SharedString, Hsla)>,
     theme: &Theme,
 ) -> impl IntoElement {
     let color = match status {
@@ -193,9 +202,16 @@ fn status_indicator(
         PresenceStatus::DoNotDisturb => theme.danger,
         PresenceStatus::Invisible => theme.muted_foreground,
     };
-    let cutout = || div().absolute().bg(backdrop).rounded_full();
+    let painted = move |element: Div| {
+        element
+            .bg(backdrop)
+            .when_some(hover.clone(), |element, (group, color)| {
+                element.group_hover(group, move |style| style.bg(color))
+            })
+    };
+    let cutout = || painted(div().absolute().rounded_full());
 
-    div().p(px(2.)).rounded_full().bg(backdrop).child(
+    painted(div().p(px(2.)).rounded_full()).child(
         div()
             .relative()
             .overflow_hidden()

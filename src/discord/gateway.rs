@@ -128,6 +128,9 @@ pub enum GatewayEvent {
         user_id: Id<UserMarker>,
         roles: Vec<Id<RoleMarker>>,
     },
+    /// Other users' statuses: friends' and guild members' from `READY` and
+    /// `READY_SUPPLEMENTAL`, then each change from `PRESENCE_UPDATE`.
+    Presences(Vec<(Id<UserMarker>, PresenceStatus)>),
     /// The user picked a status, here or on another of their clients.
     StatusSettings(PresenceStatus),
     /// How far the user has read every channel, from `READY`. Follows
@@ -300,7 +303,7 @@ struct SettingsProtoUpdate {
 /// The envelope every gateway payload arrives in. Only dispatches (opcode 0)
 /// carry a name and data the app cares about. Both borrow from the frame, so
 /// telling what a payload is costs no allocations — which matters, because
-/// most of a user account's firehose (presences, above all) is dropped unread.
+/// most of a user account's firehose is dropped unread.
 #[derive(Deserialize)]
 struct Envelope<'a> {
     #[serde(default, borrow)]
@@ -330,6 +333,63 @@ struct ReadyPayload {
     /// the DM list fetches the rest when it's opened.
     #[serde(default, deserialize_with = "skip_invalid")]
     private_channels: Vec<RawChannelUnread>,
+    /// Friends' presences, unless the session asked for them merged.
+    #[serde(default, deserialize_with = "skip_invalid")]
+    presences: Vec<RawPresence>,
+    #[serde(default)]
+    merged_presences: Option<MergedPresences>,
+}
+
+/// Presences gathered in one place, from `READY` or `READY_SUPPLEMENTAL`
+/// depending on what the session asked for. `guilds` is in the same order as
+/// `READY`'s guilds, which doesn't matter here: a status is the same in all.
+#[derive(Deserialize)]
+struct MergedPresences {
+    #[serde(default, deserialize_with = "skip_invalid")]
+    friends: Vec<RawPresence>,
+    #[serde(default)]
+    guilds: Vec<Vec<Box<RawValue>>>,
+}
+
+impl MergedPresences {
+    fn into_presences(self) -> impl Iterator<Item = RawPresence> {
+        let guilds = self.guilds.into_iter().flatten();
+        self.friends
+            .into_iter()
+            .chain(guilds.filter_map(|presence| serde_json::from_str(presence.get()).ok()))
+    }
+}
+
+/// A presence, of which only whose it is and their status are read. A
+/// `PRESENCE_UPDATE` names the user in a partial `user`; a merged presence by
+/// `user_id`.
+#[derive(Deserialize)]
+struct RawPresence {
+    #[serde(default)]
+    user: Option<ReadyUser>,
+    #[serde(default)]
+    user_id: Option<Id<UserMarker>>,
+    status: String,
+}
+
+/// The presences that name a user and a status the app knows.
+fn convert_presences(
+    presences: impl IntoIterator<Item = RawPresence>,
+) -> Vec<(Id<UserMarker>, PresenceStatus)> {
+    presences
+        .into_iter()
+        .filter_map(|presence| {
+            let user_id = presence.user_id.or(presence.user.map(|user| user.id))?;
+            Some((user_id, PresenceStatus::from_presence(&presence.status)?))
+        })
+        .collect()
+}
+
+/// `READY_SUPPLEMENTAL`, of which only the presences are read.
+#[derive(Deserialize)]
+struct ReadySupplementalPayload {
+    #[serde(default)]
+    merged_presences: Option<MergedPresences>,
 }
 
 /// A guild as `READY` and `GUILD_CREATE` send it, of which only what's needed
@@ -353,6 +413,8 @@ struct GatewayGuild {
     emojis: Option<Vec<RawEmoji>>,
     #[serde(default, deserialize_with = "skip_invalid")]
     channels: Vec<RawGuildChannel>,
+    #[serde(default, deserialize_with = "skip_invalid")]
+    presences: Vec<RawPresence>,
     #[serde(default)]
     joined_at: Option<Timestamp>,
     #[serde(default)]
@@ -595,8 +657,16 @@ fn dispatch(
                     ),
                     GatewayEvent::LatestMessages(convert_channel_unreads(ready.private_channels)),
                 ];
+                let mut presences = ready.presences;
+                presences.extend(
+                    ready
+                        .merged_presences
+                        .into_iter()
+                        .flat_map(MergedPresences::into_presences),
+                );
                 let mut merged = ready.merged_members.into_iter();
-                for guild in ready.guilds {
+                for mut guild in ready.guilds {
+                    presences.append(&mut guild.presences);
                     let merged = merged.next().unwrap_or_default();
                     let owner_id = guild.owner_id();
                     unreads.extend(guild_unreads(
@@ -623,7 +693,12 @@ fn dispatch(
                     user_id: ready.user.id,
                     voice_states,
                 };
-                std::iter::once(ready).chain(unreads).chain(roles).collect()
+                let presences = GatewayEvent::Presences(convert_presences(presences));
+                std::iter::once(ready)
+                    .chain(unreads)
+                    .chain(std::iter::once(presences))
+                    .chain(roles)
+                    .collect()
             })
             .unwrap_or_default(),
         "MESSAGE_CREATE" => serde_json::from_str::<twilight_model::channel::Message>(data)
@@ -751,7 +826,9 @@ fn dispatch(
                         &guild.members,
                     ),
                 };
+                let presences = GatewayEvent::Presences(convert_presences(guild.presences));
                 std::iter::once(voice)
+                    .chain(std::iter::once(presences))
                     .chain(unreads)
                     .chain(guild_emojis(guild.id, guild.emojis))
                     .chain(guild_roles(guild.id, guild.roles, guild.members))
@@ -793,6 +870,18 @@ fn dispatch(
             .unwrap_or_default(),
         "GUILD_MEMBER_UPDATE" => serde_json::from_str::<MemberUpdatePayload>(data)
             .map(|update| member_roles(update.guild_id, vec![update.member]).collect())
+            .unwrap_or_default(),
+        "READY_SUPPLEMENTAL" => serde_json::from_str::<ReadySupplementalPayload>(data)
+            .ok()
+            .and_then(|ready| ready.merged_presences)
+            .map(|merged| {
+                vec![GatewayEvent::Presences(convert_presences(
+                    merged.into_presences(),
+                ))]
+            })
+            .unwrap_or_default(),
+        "PRESENCE_UPDATE" => serde_json::from_str::<RawPresence>(data)
+            .map(|presence| vec![GatewayEvent::Presences(convert_presences([presence]))])
             .unwrap_or_default(),
         "USER_SETTINGS_PROTO_UPDATE" => serde_json::from_str::<SettingsProtoUpdatePayload>(data)
             .ok()
@@ -1121,6 +1210,40 @@ mod tests {
         };
         assert_eq!(guild.channels.len(), 1);
         assert!(guild.joined.is_some());
+    }
+
+    #[test]
+    fn presences_arrive_from_ready_supplemental_and_updates() {
+        let events = dispatch_json(
+            "READY_SUPPLEMENTAL",
+            r#"{
+                "merged_presences": {
+                    "friends": [{"user_id": "2", "status": "idle"}],
+                    "guilds": [[{"user_id": "3", "status": "dnd"}, {"user_id": "4", "status": "streaming"}]]
+                }
+            }"#,
+        );
+        let [GatewayEvent::Presences(presences)] = events.as_slice() else {
+            panic!("READY_SUPPLEMENTAL should yield its presences");
+        };
+        // An unknown status is skipped rather than guessed at.
+        assert_eq!(
+            presences.as_slice(),
+            [
+                (Id::new(2), PresenceStatus::Idle),
+                (Id::new(3), PresenceStatus::DoNotDisturb)
+            ]
+        );
+
+        let events = dispatch_json(
+            "PRESENCE_UPDATE",
+            r#"{"user": {"id": "2"}, "status": "offline", "activities": [], "guild_id": "10"}"#,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [GatewayEvent::Presences(presences)]
+                if presences.as_slice() == [(Id::new(2), PresenceStatus::Invisible)]
+        ));
     }
 
     #[test]

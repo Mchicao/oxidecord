@@ -6,6 +6,7 @@ use gpui_component::{ActiveTheme as _, divider::Divider, h_flex, skeleton::Skele
 
 use crate::discord::UserProfile;
 use crate::screens::home::view::avatar;
+use crate::screens::home::view::user_panel::status_indicator;
 use crate::screens::home::{HomeScreen, ProfilePopup};
 use crate::ui::depth::{self, Level, radius};
 
@@ -18,6 +19,9 @@ const BANNER_HEIGHT: f32 = 105.;
 const ACCENT_BANNER_HEIGHT: f32 = 60.;
 
 const AVATAR_SIZE: f32 = 80.;
+
+/// The status dot on the avatar, which Discord draws at a fifth of it.
+const STATUS_SIZE: f32 = 16.;
 
 /// Thickness of the ring cut out of the card around the avatar, which is what
 /// makes it read as sitting in front of the banner.
@@ -57,7 +61,26 @@ impl HomeScreen {
         let avatar_url = profile
             .and_then(|profile| profile.avatar_url.clone())
             .or_else(|| popup.avatar_url.clone());
-        let avatar = avatar(popup.name.clone(), avatar_url, px(AVATAR_SIZE));
+        // Sits where the avatar's edge crosses its bottom-right diagonal,
+        // ringed in the card so it cuts into the avatar.
+        let status_inset =
+            AVATAR_SIZE / 2. * (1. - std::f32::consts::FRAC_1_SQRT_2) - (STATUS_SIZE + 4.) / 2.;
+        let avatar = div()
+            .relative()
+            .child(avatar(popup.name.clone(), avatar_url, px(AVATAR_SIZE)))
+            .child(
+                div()
+                    .absolute()
+                    .right(px(status_inset))
+                    .bottom(px(status_inset))
+                    .child(status_indicator(
+                        self.user_status(popup.user_id),
+                        px(STATUS_SIZE),
+                        theme.popover,
+                        None,
+                        theme,
+                    )),
+            );
 
         // gpui clips to rectangles, so the banner rounds its own top corners
         // to stay inside the card's.

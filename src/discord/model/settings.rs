@@ -61,6 +61,15 @@ impl PresenceStatus {
         }
     }
 
+    /// Reads another user's status from a presence. Discord sends `offline`
+    /// for anyone offline or invisible, which looks the same either way.
+    pub(in crate::discord) fn from_presence(status: &str) -> Option<Self> {
+        match status {
+            "offline" => Some(Self::Invisible),
+            status => Self::parse(status),
+        }
+    }
+
     fn parse(status: &str) -> Option<Self> {
         Some(match status {
             "online" => Self::Online,

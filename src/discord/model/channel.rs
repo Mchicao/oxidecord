@@ -3,7 +3,7 @@
 use twilight_model::channel::ChannelType;
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, MessageMarker, UserMarker},
 };
 
 use super::cdn;
@@ -53,6 +53,9 @@ pub struct DirectMessage {
     pub id: Id<ChannelMarker>,
     pub name: String,
     pub avatar_url: Option<String>,
+    /// The other user in a 1:1 conversation, whose status the row shows.
+    /// `None` for a group DM.
+    pub recipient_id: Option<Id<UserMarker>>,
     /// Snowflake of the last message, used only to order conversations by
     /// recency like Discord does. `None` (no messages yet) sorts last.
     last_message_id: Option<u64>,
@@ -120,6 +123,7 @@ fn convert_dm(channel: twilight_model::channel::Channel) -> Option<DirectMessage
             Some(DirectMessage {
                 id: channel.id,
                 avatar_url: small_avatar_url(&user),
+                recipient_id: Some(user.id),
                 name: user.global_name.unwrap_or(user.name),
                 last_message_id,
             })
@@ -130,6 +134,7 @@ fn convert_dm(channel: twilight_model::channel::Channel) -> Option<DirectMessage
                 .icon
                 .map(|hash| cdn::group_dm_icon_url(channel.id, &hash.to_string())),
             name: group_dm_name(channel.name, channel.recipients.as_deref()),
+            recipient_id: None,
             last_message_id,
         }),
         _ => None,
