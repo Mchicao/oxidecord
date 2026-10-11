@@ -5,13 +5,13 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
-    menu::{PopupMenu, PopupMenuItem},
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, menu::PopupMenu,
     popover::Popover,
 };
 
 use twilight_model::id::{Id, marker::MessageMarker};
 
+use super::menu::MessageMenu;
 use crate::discord;
 use crate::screens::home::{EmojiTarget, HomeScreen, ReplyTarget};
 use crate::ui::button::Button;
@@ -32,17 +32,12 @@ impl HomeScreen {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let message_id = message.id;
-        let can_delete = self.can_delete_message(message);
-        // Already open for editing, the button would have nothing to do.
-        let can_edit = self.is_own_message(message)
-            && self
-                .editing
-                .as_ref()
-                .is_none_or(|editing| editing.message_id != message_id);
+        let menu = MessageMenu::new(self, message);
+        let can_delete = menu.can_delete;
+        let can_edit = menu.can_edit;
         let expanded = self.shift_held;
         let reacting = self.reacting_to(message_id);
         let shown = self.toolbar_shown(message_id);
-        let has_reactions = !message.reactions.is_empty();
 
         div()
             .id(("message-toolbar", message_id.get()))
@@ -131,15 +126,7 @@ impl HomeScreen {
                                 })),
                         )
                     })
-                    .when(!expanded, |this| {
-                        this.child(self.more_menu(
-                            message_id,
-                            can_edit,
-                            can_delete,
-                            has_reactions,
-                            cx,
-                        ))
-                    }),
+                    .when(!expanded, |this| this.child(self.more_menu(menu, cx))),
             )
     }
 
@@ -170,106 +157,17 @@ impl HomeScreen {
                     message_id: message.id,
                     author_name: message.author_name.clone(),
                 };
-                move |this, _, window, cx| {
-                    this.replying_to = Some(target.clone());
-                    // Jump straight to composing, like Discord.
-                    this.message_input.focus_handle(cx).focus(window);
-                    cx.notify();
-                }
+                move |this, _, window, cx| this.start_reply(target.clone(), window, cx)
             }))
     }
 
     /// The overflow menu, holding the actions shift exposes inline.
-    fn more_menu(
-        &self,
-        message_id: Id<MessageMarker>,
-        can_edit: bool,
-        can_delete: bool,
-        has_reactions: bool,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let danger = cx.theme().danger;
+    fn more_menu(&self, menu: MessageMenu, cx: &Context<Self>) -> impl IntoElement {
+        let message_id = menu.message_id;
         let screen = cx.entity().downgrade();
         let screen_for_open = screen.clone();
-        let build = Rc::new(move |menu: PopupMenu| {
-            let menu = menu.when(can_edit, |menu| {
-                menu.item(
-                    PopupMenuItem::new("Edit Message")
-                        .icon(Icon::default().path("icons/pencil.svg"))
-                        .on_click({
-                            let screen = screen.clone();
-                            move |_, window, cx| {
-                                if let Some(screen) = screen.upgrade() {
-                                    screen.update(cx, |this, cx| {
-                                        this.start_editing(message_id, window, cx)
-                                    });
-                                }
-                            }
-                        }),
-                )
-            });
-            let menu = menu.when(has_reactions, |menu| {
-                menu.item(
-                    PopupMenuItem::new("View Reactions")
-                        .icon(Icon::default().path("icons/smile.svg"))
-                        .on_click({
-                            let screen = screen.clone();
-                            move |_, window, cx| {
-                                if let Some(screen) = screen.upgrade() {
-                                    screen.update(cx, |this, cx| {
-                                        this.view_reactions(message_id, None, window, cx)
-                                    });
-                                }
-                            }
-                        }),
-                )
-            });
-            let menu = menu
-                .item(
-                    PopupMenuItem::new("Mark Unread")
-                        .icon(Icon::default().path("icons/mail.svg"))
-                        .on_click({
-                            let screen = screen.clone();
-                            move |_, _, cx| {
-                                if let Some(screen) = screen.upgrade() {
-                                    screen.update(cx, |this, cx| this.mark_unread(message_id, cx));
-                                }
-                            }
-                        }),
-                )
-                .item(
-                    PopupMenuItem::new("Copy Message Link")
-                        .icon(Icon::default().path("icons/link.svg"))
-                        .on_click({
-                            let screen = screen.clone();
-                            move |_, _, cx| {
-                                if let Some(screen) = screen.upgrade() {
-                                    screen.update(cx, |this, cx| {
-                                        this.copy_message_link(message_id, cx)
-                                    });
-                                }
-                            }
-                        }),
-                );
-            if !can_delete {
-                return menu;
-            }
-
-            menu.separator().item(
-                PopupMenuItem::element(move |_, _| {
-                    div().text_color(danger).child("Delete Message")
-                })
-                .icon(Icon::default().path("icons/trash-2.svg").text_color(danger))
-                .on_click({
-                    let screen = screen.clone();
-                    move |_, _, cx| {
-                        if let Some(screen) = screen.upgrade() {
-                            screen.update(cx, |this, cx| this.delete_message(message_id, cx));
-                        }
-                    }
-                }),
-            )
-        });
+        let build =
+            Rc::new(move |popup: PopupMenu, cx: &App| menu.build(popup, false, screen.clone(), cx));
 
         // A popover around a popup menu, as gpui-component's `DropdownMenu`
         // builds it, but one that reports opening and closing: the toolbar
@@ -296,7 +194,7 @@ impl HomeScreen {
                     return menu;
                 }
                 let build = build.clone();
-                let menu = PopupMenu::build(window, cx, move |menu, _, _| build(menu));
+                let menu = PopupMenu::build(window, cx, move |menu, _, cx| build(menu, cx));
                 menu_state.update(cx, |state, _| *state = Some(menu.clone()));
                 menu.focus_handle(cx).focus(window);
                 let popover = cx.entity();

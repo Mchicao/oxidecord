@@ -4,6 +4,7 @@ mod attachment;
 mod edit;
 mod embed;
 mod forward;
+mod menu;
 mod reactions;
 mod reactors;
 mod reply;
@@ -214,11 +215,16 @@ impl HomeScreen {
                     }
                 }))
             })
-            .child(inner)
-            // Nothing on the toolbar applies until the server knows the message.
-            .when(message.delivery == discord::Delivery::Sent, |this| {
-                this.child(self.render_message_toolbar(message, &group_name, cx))
-            });
+            .child(inner);
+        // Nothing on the toolbar or the menu applies until the server knows
+        // the message.
+        let row = if message.delivery == discord::Delivery::Sent {
+            let row = row.child(self.render_message_toolbar(message, &group_name, cx));
+            self.message_context_menu(row, menu::MessageMenu::new(self, message), cx)
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        };
 
         // The gap between author groups sits outside the row, so it never
         // lights up with the highlight and the highlight stays tight.
