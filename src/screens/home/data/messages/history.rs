@@ -64,6 +64,7 @@ impl HomeScreen {
         }
         self.messages.clear();
         self.messages_list.reset(0);
+        self.reactors.clear();
         self.older_loading = false;
         self.newer_loading = false;
         self.at_bottom = true;
@@ -177,6 +178,7 @@ impl HomeScreen {
     ) {
         self.messages.clear();
         self.messages_list.reset(0);
+        self.reactors.clear();
         // Release the previous conversation's decoded images instead of letting
         // them accumulate; the next one repopulates the cache as it renders.
         self.image_cache

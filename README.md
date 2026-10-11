@@ -43,7 +43,8 @@ won't know that generator so either update CMake, or build through Ninja with
 - [x] Status changes
 - [x] Video playback
 - [x] Voice calls
-- [ ] Screenshare and video calls
+- [x] Screenshare
+- [ ] Video calls
 - [ ] Caching
 - [x] Markdown rendering
 - [ ] Custom themes

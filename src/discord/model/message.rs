@@ -165,7 +165,7 @@ pub struct Reaction {
     pub me: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum ReactionEmoji {
     Unicode(String),
     Custom {
@@ -183,6 +183,18 @@ impl ReactionEmoji {
         match self {
             Self::Unicode(_) => None,
             Self::Custom { id, animated, .. } => Some(cdn::emoji_url(id, *animated)),
+        }
+    }
+
+    /// The `:name:` Discord names the emoji by in "reacted with" lines. A
+    /// unicode emoji without a known shortcode is named by itself.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Unicode(text) => emojis::get(text)
+                .and_then(|emoji| emoji.shortcode())
+                .map_or_else(|| text.clone(), |code| format!(":{code}:")),
+            Self::Custom { name, .. } if name.is_empty() => ":deleted emoji:".into(),
+            Self::Custom { name, .. } => format!(":{name}:"),
         }
     }
 }

@@ -6,15 +6,19 @@ use twilight_http::response::marker::EmptyBody;
 use twilight_model::http::attachment::Attachment;
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, MessageMarker, UserMarker},
 };
 
 use super::request;
-use crate::discord::model::{Message, ReactionEmoji, convert_message};
+use crate::discord::model::{Message, ReactionEmoji, Reactor, convert_message, convert_reactor};
 
 /// How many messages one [`fetch_messages`] call requests; a response with
 /// fewer means the start of the channel's history was reached.
 pub const MESSAGE_PAGE_SIZE: usize = 50;
+
+/// How many reactors one [`fetch_reactors`] call requests, the most Discord
+/// allows; a response with fewer means the list is complete.
+pub const REACTORS_PAGE_SIZE: usize = 100;
 
 /// TODO: add support for higher file sizes upto 500mb with nitro checks
 pub const MAX_ATTACHMENT_SIZE: u64 = 10 * 1024 * 1024;
@@ -65,13 +69,7 @@ pub async fn toggle_reaction(
     add: bool,
 ) -> Result<(), String> {
     request(move |client| async move {
-        let emoji = match &emoji {
-            ReactionEmoji::Unicode(name) => RequestReactionType::Unicode { name },
-            ReactionEmoji::Custom { id, name, .. } => RequestReactionType::Custom {
-                id: *id,
-                name: Some(name),
-            },
-        };
+        let emoji = request_emoji(&emoji);
         if add {
             client
                 .create_reaction(channel_id, message_id, &emoji)
@@ -84,6 +82,39 @@ pub async fn toggle_reaction(
         Ok(())
     })
     .await
+}
+
+/// Fetches a page of the users who reacted to a message with `emoji`, in the
+/// order they reacted, starting after the user `after`.
+pub async fn fetch_reactors(
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    emoji: ReactionEmoji,
+    after: Option<Id<UserMarker>>,
+) -> Result<Vec<Reactor>, String> {
+    request(move |client| async move {
+        let emoji = request_emoji(&emoji);
+        let request = client
+            .reactions(channel_id, message_id, &emoji)
+            .limit(REACTORS_PAGE_SIZE as u16);
+        let request = match after {
+            Some(after) => request.after(after),
+            None => request,
+        };
+        let users = request.await?.models().await?;
+        Ok(users.into_iter().map(convert_reactor).collect())
+    })
+    .await
+}
+
+fn request_emoji(emoji: &ReactionEmoji) -> RequestReactionType<'_> {
+    match emoji {
+        ReactionEmoji::Unicode(name) => RequestReactionType::Unicode { name },
+        ReactionEmoji::Custom { id, name, .. } => RequestReactionType::Custom {
+            id: *id,
+            name: Some(name),
+        },
+    }
 }
 
 /// Shows the current user typing in a channel, until they send there or ten

@@ -28,7 +28,7 @@ pub use message::{
 };
 pub use read_state::{ChannelLatest, GuildUnreads, MuteSettings, ReadState, UnreadChannel};
 pub use settings::{GuildFolders, PresenceStatus, UserSettings};
-pub use user::{CurrentUser, UserProfile};
+pub use user::{CurrentUser, Reactor, UserProfile};
 pub use voice::{StreamServerInfo, VoiceServerInfo, VoiceUserState, stream_key};
 
 pub(super) use channel::{convert_channel, convert_dms};
@@ -40,7 +40,7 @@ pub(super) use read_state::{
     convert_guild_unreads, convert_mute_settings, convert_read_states, versioned_list,
 };
 pub(super) use settings::{RawSettingsProto, encode_status_settings, parse_user_settings};
-pub(super) use user::{RawProfile, convert_current_user, convert_user_profile};
+pub(super) use user::{RawProfile, convert_current_user, convert_reactor, convert_user_profile};
 pub(super) use voice::{
     RawVoiceServer, RawVoiceState, convert_guild_voice_states, convert_stream_server,
     convert_voice_server, convert_voice_state,

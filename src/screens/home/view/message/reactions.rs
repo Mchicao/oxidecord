@@ -3,6 +3,7 @@
 use gpui::*;
 use gpui_component::{ActiveTheme as _, h_flex};
 
+use super::reactors::ReactionTooltip;
 use crate::discord;
 use crate::screens::home::HomeScreen;
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
@@ -12,7 +13,8 @@ const CHIP_HEIGHT: f32 = 24.;
 
 impl HomeScreen {
     /// Clicking a pill adds or removes the current user's reaction; the ones
-    /// they already reacted with are highlighted, like Discord.
+    /// they already reacted with are highlighted, like Discord. Hovering one
+    /// names who reacted with it.
     pub(super) fn render_reactions(
         &self,
         message: &discord::Message,
@@ -20,6 +22,7 @@ impl HomeScreen {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let message_id = message.id;
+        let screen = cx.entity();
 
         h_flex()
             .flex_wrap()
@@ -96,6 +99,25 @@ impl HomeScreen {
                             })
                             .child(reaction.count.to_string()),
                     )
+                    // Fetched as the pointer arrives, so the names are usually
+                    // in by the time the tooltip's delay is up.
+                    .on_hover(cx.listener({
+                        let emoji = emoji.clone();
+                        move |this, hovered: &bool, _, cx| {
+                            if *hovered {
+                                this.load_reactors(message_id, emoji.clone(), false, cx);
+                            }
+                        }
+                    }))
+                    .tooltip({
+                        let emoji = emoji.clone();
+                        let screen = screen.clone();
+                        move |_, cx| {
+                            let (screen, emoji) = (screen.clone(), emoji.clone());
+                            cx.new(|cx| ReactionTooltip::new(screen, message_id, emoji, cx))
+                                .into()
+                        }
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_reaction(message_id, emoji.clone(), cx);
                     }))

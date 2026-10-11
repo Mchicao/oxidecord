@@ -45,6 +45,17 @@ pub struct UserProfile {
     pub bot: bool,
 }
 
+/// Someone who reacted to a message, as the reactions list shows them.
+#[derive(Clone)]
+pub struct Reactor {
+    pub id: Id<UserMarker>,
+    /// Display name: the global display name when set, else the username.
+    pub name: String,
+    /// The `@handle` username.
+    pub username: String,
+    pub avatar_url: Option<String>,
+}
+
 /// `GET /users/{id}/profile`, the endpoint the Discord client itself uses for
 /// the profile popout. It has no twilight model, so it's deserialized here.
 #[derive(Deserialize)]
@@ -166,6 +177,18 @@ pub(in crate::discord) fn convert_current_user(
         premium: user
             .premium_type
             .is_some_and(|tier| tier != twilight_model::user::PremiumType::None),
+        username: user.name,
+    }
+}
+
+pub(in crate::discord) fn convert_reactor(user: twilight_model::user::User) -> Reactor {
+    Reactor {
+        id: user.id,
+        name: user
+            .global_name
+            .clone()
+            .unwrap_or_else(|| user.name.clone()),
+        avatar_url: small_avatar_url(&user),
         username: user.name,
     }
 }

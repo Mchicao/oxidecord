@@ -42,6 +42,7 @@ impl HomeScreen {
         let expanded = self.shift_held;
         let reacting = self.reacting_to(message_id);
         let shown = self.toolbar_shown(message_id);
+        let has_reactions = !message.reactions.is_empty();
 
         div()
             .id(("message-toolbar", message_id.get()))
@@ -131,7 +132,13 @@ impl HomeScreen {
                         )
                     })
                     .when(!expanded, |this| {
-                        this.child(self.more_menu(message_id, can_edit, can_delete, cx))
+                        this.child(self.more_menu(
+                            message_id,
+                            can_edit,
+                            can_delete,
+                            has_reactions,
+                            cx,
+                        ))
                     }),
             )
     }
@@ -178,6 +185,7 @@ impl HomeScreen {
         message_id: Id<MessageMarker>,
         can_edit: bool,
         can_delete: bool,
+        has_reactions: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let danger = cx.theme().danger;
@@ -194,6 +202,22 @@ impl HomeScreen {
                                 if let Some(screen) = screen.upgrade() {
                                     screen.update(cx, |this, cx| {
                                         this.start_editing(message_id, window, cx)
+                                    });
+                                }
+                            }
+                        }),
+                )
+            });
+            let menu = menu.when(has_reactions, |menu| {
+                menu.item(
+                    PopupMenuItem::new("View Reactions")
+                        .icon(Icon::default().path("icons/smile.svg"))
+                        .on_click({
+                            let screen = screen.clone();
+                            move |_, window, cx| {
+                                if let Some(screen) = screen.upgrade() {
+                                    screen.update(cx, |this, cx| {
+                                        this.view_reactions(message_id, None, window, cx)
                                     });
                                 }
                             }

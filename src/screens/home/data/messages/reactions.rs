@@ -1,5 +1,5 @@
 //! Reacting to a message, applied locally first and rolled back if the request
-//! fails, and taking reactions made anywhere else.
+//! fails, taking reactions made anywhere else, and fetching who reacted.
 
 use gpui::*;
 use twilight_model::id::{
@@ -103,6 +103,7 @@ impl HomeScreen {
             .position(|message| message.id == message_id)
         {
             tally_reaction(&mut self.messages[ix].reactions, emoji, add, true);
+            self.forget_reactors(message_id, Some(emoji));
             // A first or last reaction adds or drops the row of pills.
             self.messages_list.splice(ix..ix + 1, 1);
         }
@@ -128,24 +129,92 @@ impl HomeScreen {
             return;
         };
         let reactions = &mut self.messages[ix].reactions;
-        match change {
+        let changed = match change {
             discord::ReactionChange::Add { user_id, emoji } => {
                 let own = Some(user_id) == self.self_user_id;
                 tally_reaction(reactions, &emoji, true, own);
+                Some(emoji)
             }
             discord::ReactionChange::Remove { user_id, emoji } => {
                 let own = Some(user_id) == self.self_user_id;
                 tally_reaction(reactions, &emoji, false, own);
+                Some(emoji)
             }
             discord::ReactionChange::RemoveEmoji(emoji) => {
-                reactions.retain(|reaction| reaction.emoji != emoji)
+                reactions.retain(|reaction| reaction.emoji != emoji);
+                Some(emoji)
             }
-            discord::ReactionChange::RemoveAll => reactions.clear(),
-        }
+            discord::ReactionChange::RemoveAll => {
+                reactions.clear();
+                None
+            }
+        };
+        self.forget_reactors(message_id, changed.as_ref());
         // The pills can gain or lose a row, and the list only remeasures rows
         // it draws, so an off-screen message would keep its old height.
         self.messages_list.splice(ix..ix + 1, 1);
         cx.notify();
+    }
+}
+
+impl HomeScreen {
+    /// Fetches who reacted to a message with `emoji`, unless that's already
+    /// known or on its way. With `more`, fetches the next page of a list that
+    /// was cut short instead.
+    pub(in crate::screens::home) fn load_reactors(
+        &mut self,
+        message_id: Id<MessageMarker>,
+        emoji: discord::ReactionEmoji,
+        more: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(channel_id) = self.selected_channel else {
+            return;
+        };
+        let key = (message_id, emoji.clone());
+        if !more && self.reactors.contains_key(&key) {
+            return;
+        }
+        let entry = self.reactors.entry(key.clone()).or_default();
+        if entry.loading || entry.complete {
+            return;
+        }
+        let after = entry.users.last().map(|user| user.id);
+        entry.loading = true;
+        entry.error = None;
+
+        let request = discord::fetch_reactors(channel_id, message_id, emoji, after);
+        entry._task = Some(cx.spawn(async move |this, cx| {
+            let result = request.await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(entry) = this.reactors.get_mut(&key) else {
+                    return;
+                };
+                entry.loading = false;
+                match result {
+                    Ok(page) => {
+                        entry.complete = page.len() < discord::REACTORS_PAGE_SIZE;
+                        entry.users.extend(page);
+                    }
+                    Err(err) => entry.error = Some(err),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Drops what's known of who reacted to a message with `emoji`, or with
+    /// anything when `None`, once it's changed. Whatever still shows the list
+    /// fetches it again.
+    fn forget_reactors(
+        &mut self,
+        message_id: Id<MessageMarker>,
+        emoji: Option<&discord::ReactionEmoji>,
+    ) {
+        self.reactors.retain(|(id, reacted), _| {
+            *id != message_id || emoji.is_some_and(|emoji| emoji != reacted)
+        });
     }
 }
 

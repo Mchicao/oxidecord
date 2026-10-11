@@ -99,6 +99,19 @@ pub(super) enum EmojiTarget {
     Reaction(Id<MessageMarker>),
 }
 
+/// Who reacted to a message with one emoji, as far as it's been fetched.
+#[derive(Default)]
+pub(super) struct Reactors {
+    pub users: Vec<discord::Reactor>,
+    pub loading: bool,
+    /// The last page came back short, so `users` is everyone.
+    pub complete: bool,
+    pub error: Option<String>,
+    /// The fetch in flight. Held so forgetting the entry cancels it, and a
+    /// page of a list that has since changed can't land in its replacement.
+    pub _task: Option<Task<()>>,
+}
+
 /// The open emoji picker.
 pub(super) struct EmojiPicker {
     /// Window coordinates of the click that opened it, which the picker sits
@@ -350,6 +363,10 @@ pub struct HomeScreen {
     /// Profiles already fetched this session, so reopening a card is instant
     /// and repeated clicks don't refetch.
     pub(super) profile_cache: HashMap<Id<UserMarker>, discord::UserProfile>,
+    /// Who reacted with what, fetched as reaction pills are hovered or the
+    /// reactions dialog asks. Each entry is dropped when its reaction changes
+    /// and refetched by whatever is still showing it.
+    pub(super) reactors: HashMap<(Id<MessageMarker>, discord::ReactionEmoji), Reactors>,
     /// Every guild's roles, from the gateway, so a role mention can be named
     /// and coloured.
     pub(super) guild_roles: HashMap<Id<GuildMarker>, HashMap<Id<RoleMarker>, discord::Role>>,
@@ -487,6 +504,7 @@ impl HomeScreen {
             focus_handle: cx.focus_handle(),
             profile_popup: None,
             profile_cache: HashMap::new(),
+            reactors: HashMap::new(),
             guild_roles: HashMap::new(),
             self_roles: HashMap::new(),
             guild_emojis: HashMap::new(),
