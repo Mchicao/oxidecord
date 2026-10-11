@@ -1,18 +1,42 @@
 //! The scrolling message list, and the skeleton shown in its place while a
 //! conversation loads.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Sizable as _, h_flex, skeleton::Skeleton, spinner::Spinner, v_flex,
 };
 
 use crate::screens::home::HomeScreen;
+use crate::ui::button::Button;
+use crate::ui::depth::{self, Finish, Level, Lit as _, radius};
 
-use crate::screens::home::view::MESSAGE_PADDING_X;
+use crate::screens::home::view::{GROUP_GAP, MESSAGE_PADDING_X};
 
 /// Space under the newest message, on top of the list's own padding, so it
 /// doesn't sit flush against the composer.
 const NEWEST_MESSAGE_GAP: f32 = 16.;
+
+/// The red rule Discord draws above the first message the user hasn't read.
+fn new_messages_divider(cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    h_flex()
+        .w_full()
+        .pt(px(GROUP_GAP))
+        .px(px(MESSAGE_PADDING_X))
+        .items_center()
+        .child(div().flex_1().h(px(1.)).bg(theme.danger))
+        .child(
+            div()
+                .px(px(4.))
+                .rounded(px(4.))
+                .bg(theme.danger)
+                .text_color(theme.danger_foreground)
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .child("NEW"),
+        )
+}
 
 /// Placeholder message rows. The widths are fixed rather than random so the
 /// skeleton doesn't reshuffle on every frame.
@@ -103,21 +127,85 @@ impl HomeScreen {
         // while `list` renders its items during prepaint, so the stack would be
         // empty when the images actually resolve and they'd land in gpui's
         // global asset cache, which never evicts.
-        container.child(messages_list).into_any_element()
+        container = container.child(messages_list);
+        // Floats for the same reason: opened further back than the present,
+        // the way back to it stays in reach, as Discord's bar does. Added
+        // after the list so it paints over the messages rather than under.
+        if !self.reached_newest {
+            container = container.child(self.render_jump_to_present(cx));
+        }
+        container.into_any_element()
+    }
+
+    fn render_jump_to_present(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        h_flex()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .w_full()
+            .px(px(MESSAGE_PADDING_X))
+            .child(
+                h_flex()
+                    .id("jump-to-present-bar")
+                    // Keeps the pointer off the messages underneath, which
+                    // would otherwise light up and take its clicks.
+                    .occlude()
+                    .w_full()
+                    .pl_3()
+                    .pr_1()
+                    .py_1()
+                    .gap_2()
+                    .items_center()
+                    .rounded(radius::CONTROL)
+                    .bg(theme.popover)
+                    .border_1()
+                    .border_color(depth::ring(cx))
+                    .lit(Level::Overlay, Finish::Subtle, px(36.), radius::CONTROL, cx)
+                    .text_sm()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(theme.muted_foreground)
+                            .child("You're viewing older messages"),
+                    )
+                    .when(self.newer_loading, |this| {
+                        this.child(Spinner::new().small().color(theme.muted_foreground))
+                    })
+                    .child(
+                        Button::new("jump-to-present")
+                            .label("Jump To Present")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.jump_to_present(window, cx);
+                            })),
+                    ),
+            )
     }
 
     fn render_message_item(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(message) = self.messages.get(ix) else {
             return div().into_any_element();
         };
+        let unread_divider = self.unread_divider_index() == Some(ix);
         // Consecutive messages from the same author share one header, except
         // replies always show theirs so the quoted preview has room to sit
-        // above the message, like Discord.
+        // above the message, like Discord — and the divider breaks a group.
         let show_header = ix == 0
+            || unread_divider
             || message.reply.is_some()
             || self.messages.get(ix - 1).map(|previous| previous.author_id)
                 != Some(message.author_id);
         let row = self.render_message(message, show_header, cx);
+        let row = if unread_divider {
+            v_flex()
+                .w_full()
+                .child(new_messages_divider(cx))
+                .child(row)
+                .into_any_element()
+        } else {
+            row
+        };
         // The space belongs to the newest row rather than the list's padding,
         // so it scrolls away with the conversation instead of shrinking the
         // viewport. Data-side splices go through `splice_messages`, which

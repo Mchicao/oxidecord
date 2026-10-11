@@ -9,7 +9,7 @@ use twilight_model::id::{Id, marker::ChannelMarker};
 use crate::discord::Channel;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::channels::{ChannelGroup, channel_icon_path};
-use crate::screens::home::view::avatar;
+use crate::screens::home::view::{avatar, unread_pill};
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
 
@@ -40,9 +40,12 @@ impl HomeScreen {
         } else {
             self.selected_channel == Some(channel_id)
         };
+        let unread = self.shows_unread(channel);
+        let muted = self.unreads.is_muted(channel_id, channel.parent_id);
 
         h_flex()
             .id(("channel", channel_id.get()))
+            .relative()
             .px_2()
             .py(px(5.))
             .gap_2()
@@ -50,8 +53,11 @@ impl HomeScreen {
             .rounded(radius::ITEM)
             .cursor_pointer()
             .text_sm()
-            .text_color(if is_selected {
+            .text_color(if is_selected || unread {
                 theme.sidebar_accent_foreground
+            } else if muted {
+                // Muted channels fade back, as Discord's do.
+                theme.muted_foreground.opacity(0.6)
             } else {
                 theme::secondary_text(cx)
             })
@@ -63,6 +69,10 @@ impl HomeScreen {
                 this.bg(theme.sidebar_accent)
                     .font_weight(FontWeight::MEDIUM)
                     .lit(Level::Raised, Finish::Subtle, px(30.), radius::ITEM, cx)
+            })
+            .when(unread, |this| {
+                this.font_weight(FontWeight::SEMIBOLD)
+                    .child(unread_pill(px(8.), cx))
             })
             .child(
                 Icon::default()
@@ -77,6 +87,15 @@ impl HomeScreen {
                     this.select_channel(channel_id, window, cx);
                 }
             }))
+    }
+
+    /// Whether a channel shows as unread: it has something new, and isn't
+    /// muted. Voice channels' text chats are left out, since the app can't
+    /// open them to read them.
+    fn shows_unread(&self, channel: &Channel) -> bool {
+        !channel.kind.is_voice()
+            && self.unreads.is_unread(channel.id)
+            && !self.unreads.is_muted(channel.id, channel.parent_id)
     }
 
     /// Who's in a voice channel, listed under it.
@@ -205,15 +224,14 @@ impl HomeScreen {
                 ),
             );
 
-        // Like Discord, keep the selected channel visible when its category
-        // is collapsed.
-        if collapsed
-            && let Some(selected) = group
-                .channels
-                .iter()
-                .find(|channel| Some(channel.id) == self.selected_channel)
-        {
-            collapsible = collapsible.child(self.render_channel_row(selected, cx));
+        // Like Discord, keep the selected channel and the unread ones visible
+        // when their category is collapsed.
+        if collapsed {
+            for channel in group.channels.iter().filter(|channel| {
+                Some(channel.id) == self.selected_channel || self.shows_unread(channel)
+            }) {
+                collapsible = collapsible.child(self.render_channel_row(channel, cx));
+            }
         }
 
         collapsible.into_any_element()

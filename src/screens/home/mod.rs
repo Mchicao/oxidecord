@@ -12,6 +12,7 @@ mod data;
 mod emoji;
 mod folders;
 mod state;
+mod unread;
 mod view;
 mod voice;
 

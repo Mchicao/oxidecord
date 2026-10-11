@@ -155,6 +155,11 @@ impl HomeScreen {
                 }
                 match result {
                     Ok(channels) => {
+                        for channel in &channels {
+                            if let Some(latest) = channel.last_message_id {
+                                this.unreads.note_latest(channel.id, latest);
+                            }
+                        }
                         this.channel_groups = build_channel_groups(channels);
                         if let Some(channel_id) = this.first_text_channel() {
                             this.select_channel(channel_id, window, cx);

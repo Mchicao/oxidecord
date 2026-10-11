@@ -26,7 +26,6 @@
 | Message search (with filters: from, in, has, before, after) | Missing | |
 | Jump to a message (from a reply, a link, or search) | Missing | Clicking a reply quote or a forward's source doesn't open the original |
 | "Jump to present" and the new-messages bar | Missing | |
-| Mark as unread | Missing | |
 | Copy text, copy message ID, and other developer-mode context-menu items | Missing | Only "Copy Message Link" is there |
 | Right-click context menus (message, user, channel, server) | Missing | Actions are on the hover toolbar and "More" menu only |
 | Report message | Missing | |
@@ -45,7 +44,6 @@
 | Media channels | Missing | |
 | Stage channels (speakers, audience, raising a hand) | Partial | Joined as a plain voice channel |
 | Announcement channel follow and publish | Missing | Listed and readable only |
-| Unread indicators (channel bold, server pill, unread divider) | Missing | No read-state tracking at all |
 | Mention badges on servers, channels and DMs | Missing | |
 | Server and channel notification settings (all, mentions, nothing, suppress `@everyone`) | Missing | |
 | Muting servers, channels and DMs | Missing | |

@@ -204,6 +204,15 @@ impl HomeScreen {
             // A message open for editing stays lit while the pointer is
             // elsewhere, so it's clear which one the box belongs to.
             .when(editing.is_some(), |this| this.bg(theme.accent.opacity(0.4)))
+            // Alt-click marks the conversation unread from here, as in
+            // Discord.
+            .when(message.delivery == discord::Delivery::Sent, |this| {
+                this.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    if event.modifiers().alt {
+                        this.mark_unread(message_id, cx);
+                    }
+                }))
+            })
             .child(inner)
             // Nothing on the toolbar applies until the server knows the message.
             .when(message.delivery == discord::Delivery::Sent, |this| {

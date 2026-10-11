@@ -12,6 +12,7 @@ pub(super) mod guilds;
 pub(super) mod messages;
 pub(super) mod presence;
 pub(super) mod profile;
+pub(super) mod read_state;
 pub(super) mod stream;
 pub(super) mod video;
 pub(super) mod voice;

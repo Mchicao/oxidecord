@@ -45,13 +45,17 @@ pub struct Role {
 }
 
 /// A role as the gateway sends it, read here rather than through twilight's
-/// model since only three fields matter.
+/// model since only a few fields matter.
 #[derive(Deserialize)]
 pub(in crate::discord) struct RawRole {
-    id: Id<RoleMarker>,
+    pub(super) id: Id<RoleMarker>,
     name: String,
     #[serde(default)]
     color: u32,
+    /// Read for working out which channels count toward a guild's unread
+    /// mark; see [`super::read_state`].
+    #[serde(default)]
+    pub(super) permissions: Option<Permissions>,
 }
 
 /// A guild member as the gateway sends it: inside a voice state, in a guild's

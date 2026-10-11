@@ -99,12 +99,21 @@ impl HomeScreen {
                     gateway.update_presence(status);
                 }
                 self.replace_voice_states(None, voice_states, cx);
+                // The read states follow, whole, and anything kept from an
+                // earlier session could be stale.
+                self.unreads = Default::default();
             }
             discord::GatewayEvent::StatusSettings(status) => {
                 self.presence_status = Some(status);
                 cx.notify();
             }
             discord::GatewayEvent::Message(incoming) => {
+                self.unreads
+                    .note_message(incoming.channel_id, incoming.message.id);
+                // Discord acks a sender's own message for them.
+                if Some(incoming.message.author_id) == self.self_user_id {
+                    self.unreads.ack(incoming.channel_id, incoming.message.id);
+                }
                 if incoming.guild_id.is_none() {
                     self.note_dm_activity(incoming.channel_id, incoming.message.id, cx);
                 }
@@ -162,6 +171,42 @@ impl HomeScreen {
             discord::GatewayEvent::GuildEmojis { guild_id, emojis } => {
                 self.guild_emojis.insert(guild_id, emojis);
             }
+            discord::GatewayEvent::ReadStates(states) => {
+                self.unreads.set_read_states(states);
+                // Acks made before the session came up are newer than what
+                // it reports, and one sent before it connected never echoes
+                // back — so keep the unsent ones and read the open
+                // conversation again.
+                for (&channel_id, &message_id) in &self.pending_acks {
+                    self.unreads.ack(channel_id, message_id);
+                }
+                self.ack_open_conversation(cx);
+                cx.notify();
+            }
+            discord::GatewayEvent::MessageAck {
+                channel_id,
+                message_id,
+                manual,
+            } => {
+                if manual {
+                    self.unreads.set_acked(channel_id, message_id);
+                } else {
+                    self.unreads.ack(channel_id, message_id);
+                }
+                cx.notify();
+            }
+            discord::GatewayEvent::GuildUnreads(guild) => {
+                self.unreads.set_guild(guild);
+                cx.notify();
+            }
+            discord::GatewayEvent::LatestMessages(channels) => {
+                self.unreads.set_latest(channels);
+                cx.notify();
+            }
+            discord::GatewayEvent::MuteSettings(settings) => {
+                self.unreads.set_mutes(settings);
+                cx.notify();
+            }
             discord::GatewayEvent::MemberRoles {
                 guild_id,
                 user_id,
@@ -190,6 +235,12 @@ impl HomeScreen {
         if self.messages_loading {
             return;
         }
+        // Open further back than the present, the list stops short of the
+        // newest messages, and this one would sit after the gap. Paging
+        // forward brings it in.
+        if !self.reached_newest {
+            return;
+        }
         // The echo of a message sent from here takes the place of its pending
         // copy.
         if let Some(nonce) = incoming.nonce.and_then(Id::new_checked)
@@ -212,6 +263,14 @@ impl HomeScreen {
             return;
         }
 
+        // Arriving while the user is up reading history, it's unread: the
+        // divider goes above it, unless one is already further back.
+        if !self.at_bottom && self.unread_marker.is_none() {
+            self.unread_marker = self
+                .unreads
+                .acked(incoming.channel_id)
+                .filter(|&acked| acked < incoming.message.id);
+        }
         let ix = self.messages.len();
         self.messages.push(incoming.message);
         self.splice_messages(ix..ix, 1);
@@ -222,6 +281,7 @@ impl HomeScreen {
                 item_ix: ix + 1,
                 offset_in_item: px(0.),
             });
+            self.ack_open_conversation(cx);
         }
         cx.notify();
     }

@@ -16,9 +16,15 @@ use crate::screens::home::{HomeScreen, View};
 use crate::ui::depth::{Finish, Level, Lit as _};
 use crate::ui::tooltip;
 
+use super::unread_pill;
+
 /// Corner radius of the pill behind the selected icon: the icon's own 16px
 /// plus the pill's 4px of padding, so the two curves run parallel.
 const PILL_RADIUS: f32 = 20.;
+
+/// Space between an icon's frame and the rail's edge, which the unread mark
+/// hangs into: the 72px rail less the 56px frame, halved.
+const RAIL_GUTTER: Pixels = px(8.);
 
 /// Built once: `Image::from_bytes` hashes the whole buffer, and the rail
 /// renders on every frame of a scroll glide or a playing video.
@@ -80,9 +86,11 @@ impl HomeScreen {
         let guild_id = guild.id;
         let guild_name = SharedString::from(guild.name.clone());
         let is_selected = self.view == View::Guild && self.selected_guild == Some(guild_id);
+        let unread = !is_selected && self.unreads.is_guild_unread(guild_id);
 
         selection_pill(div().id(("guild", guild_id.get())), is_selected, cx)
             .child(guild_avatar(guild, px(48.)))
+            .when(unread, |this| this.child(unread_pill(RAIL_GUTTER, cx)))
             .tooltip(tooltip::text(guild_name))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_guild(guild_id, window, cx);
@@ -109,6 +117,12 @@ impl HomeScreen {
                 .selected_guild
                 .is_some_and(|id| folder.guilds.iter().any(|guild| guild.id == id));
         let label = SharedString::from(folder.name.clone().unwrap_or_else(|| "Folder".to_owned()));
+        // Open, the folder's guilds carry their own marks.
+        let unread = !expanded
+            && folder
+                .guilds
+                .iter()
+                .any(|guild| self.unreads.is_guild_unread(guild.id));
 
         v_flex()
             .items_center()
@@ -120,6 +134,7 @@ impl HomeScreen {
             .child(
                 div()
                     .id(("guild-folder", folder_id as u64))
+                    .relative()
                     .p(px(4.))
                     .cursor_pointer()
                     .child(
@@ -144,6 +159,7 @@ impl HomeScreen {
                                 }
                             }),
                     )
+                    .when(unread, |this| this.child(unread_pill(RAIL_GUTTER, cx)))
                     .tooltip(tooltip::text(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded_folders.remove(&folder_id) {
@@ -168,6 +184,7 @@ impl HomeScreen {
 fn selection_pill(frame: Stateful<Div>, selected: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     frame
+        .relative()
         .p(px(4.))
         .rounded(px(PILL_RADIUS))
         .cursor_pointer()

@@ -75,8 +75,19 @@ impl HomeScreen {
         });
         self.send_error = None;
         self.replying_to = None;
+        // Speaking up reads the conversation, as in Discord: the divider goes
+        // and the channel can be acked again.
+        self.set_unread_marker(None);
+        self.marked_unread = false;
         // The message ends the indicator, so the next keystroke starts it anew.
         self.typing_sent = None;
+
+        // Sending from further back in history jumps to the present first,
+        // as Discord does; the message comes in with it, so there's no
+        // pending copy to show meanwhile.
+        if !self.reached_newest {
+            self.jump_to_present(window, cx);
+        }
 
         let (nonce, timestamp) = next_nonce();
         let pending_id = Id::new(nonce);

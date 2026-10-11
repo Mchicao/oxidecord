@@ -43,6 +43,7 @@ impl HomeScreen {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(dms) => {
+                        this.note_dm_latest(&dms);
                         this.dms = dms;
                         this.dms_loaded = true;
                     }
@@ -94,6 +95,7 @@ impl HomeScreen {
                 this.dms_refreshing = false;
                 match result {
                     Ok(dms) => {
+                        this.note_dm_latest(&dms);
                         this.dms = dms;
                         cx.notify();
                     }
@@ -102,6 +104,14 @@ impl HomeScreen {
             });
         })
         .detach();
+    }
+
+    fn note_dm_latest(&mut self, dms: &[DirectMessage]) {
+        for dm in dms {
+            if let Some(latest) = dm.last_message_id() {
+                self.unreads.note_latest(dm.id, latest);
+            }
+        }
     }
 
     /// The DM matching the currently open conversation, if the DM view is

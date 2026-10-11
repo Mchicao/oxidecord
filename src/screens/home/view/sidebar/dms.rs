@@ -6,7 +6,7 @@ use gpui_component::{ActiveTheme as _, h_flex, skeleton::Skeleton, v_flex};
 
 use crate::discord::DirectMessage;
 use crate::screens::home::HomeScreen;
-use crate::screens::home::view::avatar;
+use crate::screens::home::view::{avatar, unread_pill};
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
 
@@ -23,11 +23,13 @@ impl HomeScreen {
         let theme = cx.theme();
         let channel_id = dm.id;
         let is_selected = self.selected_channel == Some(channel_id);
+        let unread = self.unreads.is_unread(channel_id);
 
         let avatar = avatar(dm.name.clone(), dm.avatar_url.clone(), px(32.));
 
         h_flex()
             .id(("dm", channel_id.get()))
+            .relative()
             .px_2()
             .py(px(6.))
             .gap_3()
@@ -35,7 +37,7 @@ impl HomeScreen {
             .rounded(radius::ITEM)
             .cursor_pointer()
             .text_sm()
-            .text_color(if is_selected {
+            .text_color(if is_selected || unread {
                 theme.sidebar_accent_foreground
             } else {
                 theme::secondary_text(cx)
@@ -48,6 +50,10 @@ impl HomeScreen {
                 this.bg(theme.sidebar_accent)
                     .font_weight(FontWeight::MEDIUM)
                     .lit(Level::Raised, Finish::Subtle, px(44.), radius::ITEM, cx)
+            })
+            .when(unread, |this| {
+                this.font_weight(FontWeight::SEMIBOLD)
+                    .child(unread_pill(px(8.), cx))
             })
             .child(avatar)
             .child(div().flex_1().truncate().child(dm.name.clone()))

@@ -138,3 +138,23 @@ fn avatar(name: String, url: Option<String>, size: Pixels) -> Avatar {
         None => avatar,
     }
 }
+
+/// The small bar Discord hangs off the left of a channel, DM, or guild with
+/// something unread. Placed against the row's left edge, `inset` out from it
+/// into the gutter beside the list.
+fn unread_pill(inset: Pixels, cx: &App) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(-inset)
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .w(px(4.))
+                .h(px(8.))
+                .rounded_r(px(4.))
+                .bg(cx.theme().foreground),
+        )
+}

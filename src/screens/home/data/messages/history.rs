@@ -1,9 +1,13 @@
-//! Opening a conversation and paging back through its history.
+//! Opening a conversation, at the first unread message when there is one, and
+//! paging through its history either way from there.
 
 use gpui::*;
-use twilight_model::id::{Id, marker::ChannelMarker};
+use twilight_model::id::{
+    Id,
+    marker::{ChannelMarker, MessageMarker},
+};
 
-use crate::discord;
+use crate::discord::{self, MessagePage};
 use crate::screens::home::{HomeScreen, View};
 
 impl HomeScreen {
@@ -33,32 +37,134 @@ impl HomeScreen {
                 .selected_channel_info()
                 .map(|channel| format!("Message #{}", channel.name)),
         };
+        // Where the user had read up to, taken before opening acks it.
+        let marker = self
+            .unreads
+            .is_unread(channel_id)
+            .then(|| self.unreads.acked(channel_id))
+            .flatten();
         self.reset_conversation(placeholder, window, cx);
+        self.unread_marker = marker;
         self.messages_loading = true;
+        self.fetch_opening_page(channel_id, marker, window, cx);
+    }
 
-        cx.spawn(async move |this, cx| {
-            let result = discord::fetch_messages(channel_id, None).await;
-            let _ = this.update(cx, |this, cx| {
+    /// Leaves history opened further back for the newest page, as Discord's
+    /// "Jump To Present" does.
+    pub(in crate::screens::home) fn jump_to_present(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(channel_id) = self.selected_channel else {
+            return;
+        };
+        if self.messages_loading {
+            return;
+        }
+        self.messages.clear();
+        self.messages_list.reset(0);
+        self.older_loading = false;
+        self.newer_loading = false;
+        self.at_bottom = true;
+        self.messages_loading = true;
+        self.fetch_opening_page(channel_id, None, window, cx);
+        cx.notify();
+    }
+
+    /// Fetches the page a conversation opens on: the newest, scrolled to the
+    /// "new" divider when `unread_after` — the last message read — falls in
+    /// it. When it falls further back, the unread run is longer than a page,
+    /// and the conversation opens where the user left off instead, as
+    /// Discord's does, to be paged forward from there.
+    fn fetch_opening_page(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        unread_after: Option<Id<MessageMarker>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            let page_size = discord::MESSAGE_PAGE_SIZE;
+            let mut result = discord::fetch_messages(channel_id, MessagePage::Latest)
+                .await
+                .map(|page| (page, true));
+            if let (Ok((latest, _)), Some(marker)) = (&result, unread_after)
+                && latest.len() == page_size
+                && latest.first().is_some_and(|first| first.id > marker)
+            {
+                result = discord::fetch_messages(channel_id, MessagePage::After(marker))
+                    .await
+                    .map(|page| (page, false));
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
                 // The user may have clicked another channel while this request
                 // was in flight; drop the stale response.
                 if this.selected_channel != Some(channel_id) {
                     return;
                 }
+                this.messages_loading = false;
                 match result {
-                    Ok(messages) => {
-                        this.reached_oldest = messages.len() < discord::MESSAGE_PAGE_SIZE;
+                    Ok((messages, latest)) => {
+                        let full = messages.len() == page_size;
+                        this.reached_oldest = latest && !full;
+                        this.reached_newest = latest || !full;
                         this.messages = messages;
                         // Resetting also snaps the bottom-aligned list to the
                         // newest message.
                         this.messages_list.reset(this.messages.len());
+                        // Opened just past the last read message, the read
+                        // ones above it give the divider something to sit
+                        // under.
+                        if !latest {
+                            this.load_older_messages(cx);
+                        }
+                        if unread_after.is_some() {
+                            this.scroll_to_unread(window, cx);
+                        }
                     }
                     Err(err) => this.messages_error = Some(err),
                 }
-                this.messages_loading = false;
+                this.ack_open_conversation(cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Puts the first unread message at the top of the view.
+    ///
+    /// The list stops short of scrolling past its end, so when the unread
+    /// all fit on screen this lands at the bottom after all, and they've been
+    /// read. That's only known once the list has been laid out, so the check
+    /// waits for it: next-frame callbacks run before the frame they're queued
+    /// for is drawn, hence two of them.
+    fn scroll_to_unread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = match self.unread_divider_index() {
+            Some(ix) => ix,
+            None if !self.reached_newest => 0,
+            None => return,
+        };
+        self.messages_list.scroll_to(ListOffset {
+            item_ix: ix,
+            offset_in_item: px(0.),
+        });
+        self.at_bottom = false;
+
+        let screen = cx.entity().downgrade();
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |_, cx| {
+                let _ = screen.update(cx, |this, cx| {
+                    let list = &this.messages_list;
+                    // Pinned to the bottom, the list reports its top as past
+                    // the last item.
+                    if !this.at_bottom && list.logical_scroll_top().item_ix >= list.item_count() {
+                        this.at_bottom = true;
+                        this.ack_open_conversation(cx);
+                    }
+                });
+            });
+        });
     }
 
     /// Empties the message pane and everything tied to the conversation that
@@ -79,6 +185,8 @@ impl HomeScreen {
         self.messages_error = None;
         self.older_loading = false;
         self.reached_oldest = false;
+        self.newer_loading = false;
+        self.reached_newest = true;
         // A freshly opened conversation starts pinned to its newest message, so
         // live messages should follow along until the user scrolls up.
         self.at_bottom = true;
@@ -86,6 +194,8 @@ impl HomeScreen {
         self.replying_to = None;
         self.editing = None;
         self.revealed_spoilers.clear();
+        self.unread_marker = None;
+        self.marked_unread = false;
         for attachment in self.pending_attachments.drain(..) {
             attachment.release_preview(cx);
         }
@@ -112,7 +222,7 @@ impl HomeScreen {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let result = discord::fetch_messages(channel_id, Some(oldest_id)).await;
+            let result = discord::fetch_messages(channel_id, MessagePage::Before(oldest_id)).await;
             let _ = this.update(cx, |this, cx| {
                 // Drop the response if the channel changed or the messages
                 // were reloaded while this request was in flight.
@@ -132,8 +242,66 @@ impl HomeScreen {
                     if count > 0 {
                         this.messages.splice(0..0, older);
                         this.messages_list.splice(0..0, count);
+                        // The divider may now belong above what was the
+                        // oldest row, which was measured without it.
+                        if this.unread_divider_index() == Some(count) {
+                            this.messages_list.splice(count..count + 1, 1);
+                        }
                     }
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Fetches the page newer than the newest loaded message and appends it,
+    /// while the conversation is open further back than its present.
+    pub(in crate::screens::home) fn load_newer_messages(&mut self, cx: &mut Context<Self>) {
+        if self.messages_loading || self.newer_loading || self.reached_newest {
+            return;
+        }
+        let Some(channel_id) = self.selected_channel else {
+            return;
+        };
+        let Some(newest_id) = self.messages.last().map(|message| message.id) else {
+            return;
+        };
+        self.newer_loading = true;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = discord::fetch_messages(channel_id, MessagePage::After(newest_id)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.selected_channel != Some(channel_id)
+                    || this.messages.last().map(|message| message.id) != Some(newest_id)
+                {
+                    return;
+                }
+                this.newer_loading = false;
+                // A failed fetch retries the next time the user scrolls near
+                // the end.
+                if let Ok(newer) = result {
+                    if newer.len() < discord::MESSAGE_PAGE_SIZE {
+                        this.reached_newest = true;
+                    }
+                    let count = newer.len();
+                    if count > 0 {
+                        // Scrolled right to the end, the list is pinned to its
+                        // bottom and would ride the new rows down past every
+                        // one of them. Pin it where it stands instead: a
+                        // viewport up from the end.
+                        let list = &this.messages_list;
+                        if list.logical_scroll_top().item_ix >= list.item_count() {
+                            list.scroll_by(-list.viewport_bounds().size.height);
+                        }
+                        let ix = this.messages.len();
+                        this.messages.extend(newer);
+                        this.splice_messages(ix..ix, count);
+                        this.at_bottom = false;
+                    }
+                }
+                this.ack_open_conversation(cx);
                 cx.notify();
             });
         })

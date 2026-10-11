@@ -18,12 +18,16 @@ use twilight_model::id::{
 
 use crate::platform::runtime;
 
+use twilight_model::util::Timestamp;
+
 use super::model::{
-    GuildEmoji, Message, PresenceStatus, RawEmoji, RawMember, RawRole, RawVoiceServer,
-    RawVoiceState, ReactionEmoji, Role, StreamServerInfo, VoiceServerInfo, VoiceUserState,
-    convert_guild_emoji, convert_guild_voice_states, convert_message, convert_reaction_emoji,
-    convert_role, convert_stream_server, convert_voice_server, convert_voice_state,
-    parse_user_settings,
+    ChannelLatest, GuildEmoji, GuildUnreads, Message, MuteSettings, PresenceStatus,
+    RawChannelUnread, RawEmoji, RawGuildChannel, RawGuildSettings, RawMember, RawReadState,
+    RawRole, RawVoiceServer, RawVoiceState, ReactionEmoji, ReadState, Role, StreamServerInfo,
+    VoiceServerInfo, VoiceUserState, convert_channel_unreads, convert_guild_emoji,
+    convert_guild_unreads, convert_guild_voice_states, convert_message, convert_mute_settings,
+    convert_reaction_emoji, convert_read_states, convert_role, convert_stream_server,
+    convert_voice_server, convert_voice_state, parse_user_settings, versioned_list,
 };
 
 /// A message received live over the gateway, tagged with the channel it
@@ -126,6 +130,25 @@ pub enum GatewayEvent {
     },
     /// The user picked a status, here or on another of their clients.
     StatusSettings(PresenceStatus),
+    /// How far the user has read every channel, from `READY`. Follows
+    /// `Ready`, which clears what an earlier session knew.
+    ReadStates(Vec<ReadState>),
+    /// The user read a channel up to a message, here or on another client.
+    /// `manual` when the ack went backwards: a message marked unread.
+    MessageAck {
+        channel_id: Id<ChannelMarker>,
+        message_id: Id<MessageMarker>,
+        manual: bool,
+    },
+    /// A guild's channels that count toward its unread mark, from `READY` or
+    /// `GUILD_CREATE`. Replaces what was known of the guild.
+    GuildUnreads(GuildUnreads),
+    /// Channels' newest messages: the DMs' from `READY`, and channels that
+    /// moved in guilds the session isn't sent every message for.
+    LatestMessages(Vec<ChannelLatest>),
+    /// What the user muted: in every guild from `READY`, in one from
+    /// `USER_GUILD_SETTINGS_UPDATE`.
+    MuteSettings(Vec<MuteSettings>),
 }
 
 /// How a message's reactions changed.
@@ -298,6 +321,15 @@ struct ReadyPayload {
     /// they arrive in each guild's own `members`.
     #[serde(default)]
     merged_members: Vec<Vec<RawMember>>,
+    /// A plain list, or versioned when the session asked for it.
+    #[serde(default, deserialize_with = "versioned_list")]
+    read_state: Vec<RawReadState>,
+    #[serde(default, deserialize_with = "versioned_list")]
+    user_guild_settings: Vec<RawGuildSettings>,
+    /// DMs and group DMs, of which only how far each has got is read here —
+    /// the DM list fetches the rest when it's opened.
+    #[serde(default, deserialize_with = "skip_invalid")]
+    private_channels: Vec<RawChannelUnread>,
 }
 
 /// A guild as `READY` and `GUILD_CREATE` send it, of which only what's needed
@@ -319,6 +351,50 @@ struct GatewayGuild {
     /// as opposed to a guild that has none.
     #[serde(default, deserialize_with = "skip_invalid_opt")]
     emojis: Option<Vec<RawEmoji>>,
+    #[serde(default, deserialize_with = "skip_invalid")]
+    channels: Vec<RawGuildChannel>,
+    #[serde(default)]
+    joined_at: Option<Timestamp>,
+    #[serde(default)]
+    owner_id: Option<Id<UserMarker>>,
+    /// Where the guild's own fields sit when the session asked for them
+    /// apart from its lists.
+    #[serde(default)]
+    properties: Option<GuildProperties>,
+}
+
+#[derive(Deserialize)]
+struct GuildProperties {
+    #[serde(default)]
+    owner_id: Option<Id<UserMarker>>,
+}
+
+impl GatewayGuild {
+    fn owner_id(&self) -> Option<Id<UserMarker>> {
+        self.owner_id.or_else(|| self.properties.as_ref()?.owner_id)
+    }
+}
+
+/// `MESSAGE_ACK`.
+#[derive(Deserialize)]
+struct MessageAckPayload {
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    #[serde(default)]
+    manual: bool,
+}
+
+/// `CHANNEL_UNREAD_UPDATE`, `PASSIVE_UPDATE_V1`, and `PASSIVE_UPDATE_V2`,
+/// which each carry channels' newest messages under a name of their own.
+#[derive(Deserialize)]
+struct ChannelUnreadsPayload {
+    #[serde(
+        default,
+        alias = "channels",
+        alias = "updated_channels",
+        deserialize_with = "skip_invalid"
+    )]
+    channel_unread_updates: Vec<RawChannelUnread>,
 }
 
 /// `GUILD_EMOJIS_UPDATE`: the guild's whole emoji list as it now stands.
@@ -463,6 +539,7 @@ pub fn connect_gateway(
     drop(guard);
 
     runtime::handle().spawn(async move {
+        let mut self_id = None;
         while let Some(item) = shard.next().await {
             // Reconnects and resumes are handled by the shard internally; a
             // receive error just means skip this one and keep listening.
@@ -479,7 +556,7 @@ pub fn connect_gateway(
 
             // A dispatch the app doesn't handle, or one whose shape doesn't
             // match, yields nothing rather than ending the loop.
-            for event in dispatch(name, data) {
+            for event in dispatch(name, data, &mut self_id) {
                 if !on_event(event) {
                     return;
                 }
@@ -492,16 +569,45 @@ pub fn connect_gateway(
 
 /// Turns one dispatch into the events the app acts on. `READY` and
 /// `GUILD_CREATE` fan out into several.
-fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
+///
+/// `self_id` is the signed-in user, remembered from `READY` for the
+/// dispatches that need it and don't say.
+fn dispatch(
+    name: &str,
+    data: &RawValue,
+    self_id: &mut Option<Id<UserMarker>>,
+) -> Vec<GatewayEvent> {
     let data = data.get();
     match name {
         "READY" => serde_json::from_str::<ReadyPayload>(data)
             .map(|ready| {
+                *self_id = Some(ready.user.id);
                 let mut voice_states = Vec::new();
                 let mut roles = Vec::new();
+                let mut unreads = vec![
+                    GatewayEvent::ReadStates(convert_read_states(ready.read_state)),
+                    GatewayEvent::MuteSettings(
+                        ready
+                            .user_guild_settings
+                            .into_iter()
+                            .map(convert_mute_settings)
+                            .collect(),
+                    ),
+                    GatewayEvent::LatestMessages(convert_channel_unreads(ready.private_channels)),
+                ];
                 let mut merged = ready.merged_members.into_iter();
                 for guild in ready.guilds {
                     let merged = merged.next().unwrap_or_default();
+                    let owner_id = guild.owner_id();
+                    unreads.extend(guild_unreads(
+                        guild.id,
+                        ready.user.id,
+                        owner_id,
+                        guild.joined_at,
+                        &guild.roles,
+                        guild.members.iter().chain(&merged),
+                        guild.channels,
+                    ));
                     voice_states.extend(convert_guild_voice_states(
                         guild.id,
                         guild.voice_states,
@@ -517,7 +623,7 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
                     user_id: ready.user.id,
                     voice_states,
                 };
-                std::iter::once(ready).chain(roles).collect()
+                std::iter::once(ready).chain(unreads).chain(roles).collect()
             })
             .unwrap_or_default(),
         "MESSAGE_CREATE" => serde_json::from_str::<twilight_model::channel::Message>(data)
@@ -625,6 +731,18 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
             .unwrap_or_default(),
         "GUILD_CREATE" => serde_json::from_str::<GatewayGuild>(data)
             .map(|guild| {
+                let owner_id = guild.owner_id();
+                let unreads = self_id.and_then(|self_id| {
+                    guild_unreads(
+                        guild.id,
+                        self_id,
+                        owner_id,
+                        guild.joined_at,
+                        &guild.roles,
+                        &guild.members,
+                        guild.channels,
+                    )
+                });
                 let voice = GatewayEvent::GuildVoiceStates {
                     guild_id: guild.id,
                     states: convert_guild_voice_states(
@@ -634,6 +752,7 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
                     ),
                 };
                 std::iter::once(voice)
+                    .chain(unreads)
                     .chain(guild_emojis(guild.id, guild.emojis))
                     .chain(guild_roles(guild.id, guild.roles, guild.members))
                     .collect()
@@ -681,8 +800,62 @@ fn dispatch(name: &str, data: &RawValue) -> Vec<GatewayEvent> {
             .and_then(|update| parse_user_settings(&update.settings.proto).ok()?.status)
             .map(|status| vec![GatewayEvent::StatusSettings(status)])
             .unwrap_or_default(),
+        "MESSAGE_ACK" => serde_json::from_str::<MessageAckPayload>(data)
+            .map(|ack| {
+                vec![GatewayEvent::MessageAck {
+                    channel_id: ack.channel_id,
+                    message_id: ack.message_id,
+                    manual: ack.manual,
+                }]
+            })
+            .unwrap_or_default(),
+        "CHANNEL_UNREAD_UPDATE" | "PASSIVE_UPDATE_V1" | "PASSIVE_UPDATE_V2" => {
+            serde_json::from_str::<ChannelUnreadsPayload>(data)
+                .map(|update| convert_channel_unreads(update.channel_unread_updates))
+                .ok()
+                .filter(|channels| !channels.is_empty())
+                .map(|channels| vec![GatewayEvent::LatestMessages(channels)])
+                .unwrap_or_default()
+        }
+        "USER_GUILD_SETTINGS_UPDATE" => serde_json::from_str::<RawGuildSettings>(data)
+            .map(|settings| {
+                vec![GatewayEvent::MuteSettings(vec![convert_mute_settings(
+                    settings,
+                )])]
+            })
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+/// A guild's channels as an unread event, unless it arrived without any —
+/// an unavailable guild, which says nothing about them. `members` is
+/// searched for the signed-in user's own, whose roles decide what they see.
+fn guild_unreads<'a>(
+    guild_id: Id<GuildMarker>,
+    self_id: Id<UserMarker>,
+    owner_id: Option<Id<UserMarker>>,
+    joined_at: Option<Timestamp>,
+    roles: &[RawRole],
+    members: impl IntoIterator<Item = &'a RawMember>,
+    channels: Vec<RawGuildChannel>,
+) -> Option<GatewayEvent> {
+    if channels.is_empty() {
+        return None;
+    }
+    let member_roles = members
+        .into_iter()
+        .find(|member| member.user_id() == Some(self_id))
+        .map(|member| member.roles.as_slice());
+    Some(GatewayEvent::GuildUnreads(convert_guild_unreads(
+        guild_id,
+        self_id,
+        owner_id,
+        joined_at,
+        roles,
+        member_roles,
+        channels,
+    )))
 }
 
 /// A guild's emoji as an event, unless the guild arrived without its list.
@@ -729,7 +902,11 @@ mod tests {
     use super::*;
 
     fn dispatch_json(name: &str, json: &str) -> Vec<GatewayEvent> {
-        dispatch(name, &RawValue::from_string(json.to_owned()).unwrap())
+        dispatch(
+            name,
+            &RawValue::from_string(json.to_owned()).unwrap(),
+            &mut Some(Id::new(1)),
+        )
     }
 
     fn ready_voice_states(events: &[GatewayEvent]) -> &[VoiceUserState] {
@@ -901,6 +1078,49 @@ mod tests {
         assert_eq!(state.guild_id, Some(Id::new(10)));
         assert_eq!(state.name.as_deref(), Some("user2"));
         assert!(state.avatar_url.is_some());
+    }
+
+    #[test]
+    fn ready_carries_read_states_and_the_channels_the_user_can_see() {
+        let events = dispatch_json(
+            "READY",
+            r#"{
+                "user": {"id": "1"},
+                "read_state": [{"id": "100", "last_message_id": "40"}],
+                "private_channels": [{"id": "200", "type": 1, "last_message_id": "9"}],
+                "guilds": [{
+                    "id": "10",
+                    "joined_at": "2020-01-01T00:00:00+00:00",
+                    "roles": [
+                        {"id": "10", "name": "@everyone", "permissions": "0"},
+                        {"id": "20", "name": "member", "permissions": "1024"}
+                    ],
+                    "channels": [
+                        {"id": "100", "type": 0, "last_message_id": "50"}
+                    ]
+                }],
+                "merged_members": [[{"user_id": "1", "roles": ["20"]}]]
+            }"#,
+        );
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            GatewayEvent::ReadStates(states) if states.len() == 1
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            GatewayEvent::LatestMessages(channels)
+                if channels[0].channel_id == Id::new(200)
+        )));
+        // Visible through the member's role, not `@everyone`.
+        let Some(GatewayEvent::GuildUnreads(guild)) = events
+            .iter()
+            .find(|event| matches!(event, GatewayEvent::GuildUnreads(_)))
+        else {
+            panic!("READY should carry the guild's channels");
+        };
+        assert_eq!(guild.channels.len(), 1);
+        assert!(guild.joined.is_some());
     }
 
     #[test]

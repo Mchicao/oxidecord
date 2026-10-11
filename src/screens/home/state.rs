@@ -26,6 +26,7 @@ use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
 use super::emoji::PickerRow;
 use super::folders::RailEntry;
+use super::unread::Unreads;
 use super::voice::{PendingVoice, ScreenShare, StreamWatch, VoiceCall};
 use crate::voice::VoiceEngine;
 use crate::voice::stream::StreamEvent;
@@ -33,10 +34,10 @@ use crate::voice::stream::StreamEvent;
 /// How many lines the composer grows to before it scrolls.
 const COMPOSER_MAX_ROWS: usize = 12;
 
-/// How many messages from the oldest loaded one the view has to reach before
-/// the next page is fetched. A page takes a round trip to arrive, and a scroll
-/// that hits the top before then has nowhere left to go.
-const OLDER_PAGE_PREFETCH: usize = 10;
+/// How many messages from either end of what's loaded the view has to reach
+/// before the next page that way is fetched. A page takes a round trip to
+/// arrive, and a scroll that hits the end before then has nowhere left to go.
+const PAGE_PREFETCH: usize = 10;
 
 /// Which list occupies the sidebar: a guild's channels, or the DM list.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -229,6 +230,18 @@ pub struct HomeScreen {
     /// message arrived in a conversation the list didn't have.
     pub(super) dms_refreshing: bool,
     pub(super) collapsed_categories: HashSet<Id<ChannelMarker>>,
+    /// What's unread, across every guild and DM.
+    pub(super) unreads: Unreads,
+    /// The last message that had been read when the open conversation was
+    /// opened, which the "new" divider sits under. `None` when nothing was
+    /// unread.
+    pub(super) unread_marker: Option<Id<MessageMarker>>,
+    /// The user marked a message in the open conversation unread, so it
+    /// isn't acked again until they leave it.
+    pub(super) marked_unread: bool,
+    /// Acks waiting to be sent, by channel, and the timer that sends them.
+    pub(super) pending_acks: HashMap<Id<ChannelMarker>, Id<MessageMarker>>,
+    pub(super) ack_flush: Option<Task<()>>,
     pub(super) channels_loading: bool,
     pub(super) channels_error: Option<String>,
     pub(super) messages: Vec<discord::Message>,
@@ -238,6 +251,13 @@ pub struct HomeScreen {
     pub(super) older_loading: bool,
     /// The start of the channel's history has been reached; stop fetching.
     pub(super) reached_oldest: bool,
+    /// A newer page is being fetched, scrolled down through history that
+    /// was opened further back than the present.
+    pub(super) newer_loading: bool,
+    /// The loaded messages run up to the channel's newest. Only not so when
+    /// the conversation opened at an unread run longer than a page, as
+    /// Discord's does, until paging forward or jumping to the present.
+    pub(super) reached_newest: bool,
     /// Whether the newest message is currently in view. Used to decide if a
     /// live message should snap the list to the bottom (following the
     /// conversation) or be appended silently (the user is reading history).
@@ -383,12 +403,19 @@ impl HomeScreen {
         messages_list.set_scroll_handler(move |event, _window, cx| {
             let _ = weak.update(cx, |this, cx| {
                 this.at_bottom = event.visible_range.end >= event.count;
+                // Reaching the newest message is reading it.
+                if this.at_bottom {
+                    this.ack_open_conversation(cx);
+                }
                 // Nearing the oldest loaded message; fetch the previous page.
                 // Far enough ahead that a page usually lands before the scroll
                 // reaches the top, so a continuous scroll up never stalls
                 // against it.
-                if event.visible_range.start <= OLDER_PAGE_PREFETCH {
+                if event.visible_range.start <= PAGE_PREFETCH {
                     this.load_older_messages(cx);
+                }
+                if event.visible_range.end + PAGE_PREFETCH >= event.count {
+                    this.load_newer_messages(cx);
                 }
             });
         });
@@ -412,6 +439,11 @@ impl HomeScreen {
             dms_loaded: false,
             dms_refreshing: false,
             collapsed_categories: HashSet::new(),
+            unreads: Unreads::default(),
+            unread_marker: None,
+            marked_unread: false,
+            pending_acks: HashMap::new(),
+            ack_flush: None,
             channels_loading: false,
             channels_error: None,
             messages: Vec::new(),
@@ -419,6 +451,8 @@ impl HomeScreen {
             messages_error: None,
             older_loading: false,
             reached_oldest: false,
+            newer_loading: false,
+            reached_newest: true,
             at_bottom: true,
             send_error: None,
             replying_to: None,

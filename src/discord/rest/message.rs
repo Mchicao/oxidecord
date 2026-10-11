@@ -1,6 +1,8 @@
 //! Reading a channel's history, sending to it, and reacting to what's in it.
 
 use twilight_http::request::channel::reaction::RequestReactionType;
+use twilight_http::request::{Method, RequestBuilder};
+use twilight_http::response::marker::EmptyBody;
 use twilight_model::http::attachment::Attachment;
 use twilight_model::id::{
     Id,
@@ -17,25 +19,39 @@ pub const MESSAGE_PAGE_SIZE: usize = 50;
 /// TODO: add support for higher file sizes upto 500mb with nitro checks
 pub const MAX_ATTACHMENT_SIZE: u64 = 10 * 1024 * 1024;
 
-/// Fetches a page of messages in a channel, oldest first. With `before`,
-/// fetches the page older than that message; otherwise the most recent page.
+/// Which page of a channel's history [`fetch_messages`] fetches.
+#[derive(Clone, Copy)]
+pub enum MessagePage {
+    /// The most recent messages.
+    Latest,
+    /// The messages just older than this one.
+    Before(Id<MessageMarker>),
+    /// The messages just newer than this one, which needn't be real — any
+    /// snowflake does, an ack's included.
+    After(Id<MessageMarker>),
+}
+
+/// Fetches a page of messages in a channel, oldest first.
 pub async fn fetch_messages(
     channel_id: Id<ChannelMarker>,
-    before: Option<Id<MessageMarker>>,
+    page: MessagePage,
 ) -> Result<Vec<Message>, String> {
     request(move |client| async move {
         let request = client
             .channel_messages(channel_id)
             .limit(MESSAGE_PAGE_SIZE as u16);
-        // `.before()` changes the request's type, so await per branch.
-        let response = match before {
-            Some(before) => request.before(before).await,
-            None => request.await,
+        // Each anchor changes the request's type, so await per branch.
+        let response = match page {
+            MessagePage::Latest => request.await,
+            MessagePage::Before(before) => request.before(before).await,
+            MessagePage::After(after) => request.after(after).await,
         }?;
         let mut messages = response.models().await?;
 
-        // The API returns newest first; the UI renders oldest first.
-        messages.reverse();
+        // The API returns newest first; the UI renders oldest first. Sorted
+        // rather than reversed, since Discord doesn't promise the order of an
+        // `after` page.
+        messages.sort_by_key(|message| message.id);
         Ok(messages.into_iter().map(convert_message).collect())
     })
     .await
@@ -75,6 +91,36 @@ pub async fn toggle_reaction(
 pub async fn trigger_typing(channel_id: Id<ChannelMarker>) -> Result<(), String> {
     request(move |client| async move {
         client.create_typing_trigger(channel_id).await?;
+        Ok(())
+    })
+    .await
+}
+
+/// Marks a channel read up to `message_id` (`POST
+/// /channels/{id}/messages/{id}/ack`), which needn't be a real message.
+///
+/// `manual` says the ack goes backwards, as marking a message unread does —
+/// without it, other clients may ignore an ack older than the one they hold.
+/// Discord doesn't recount the mentions past a manual ack, so it's given
+/// none. A user-client endpoint with no twilight helper.
+pub async fn ack_message(
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    manual: bool,
+) -> Result<(), String> {
+    request(move |client| async move {
+        let body = if manual {
+            serde_json::json!({ "token": null, "manual": true, "mention_count": 0 })
+        } else {
+            serde_json::json!({ "token": null })
+        };
+        let request = RequestBuilder::raw(
+            Method::Post,
+            format!("channels/{channel_id}/messages/{message_id}/ack"),
+        )
+        .json(&body)
+        .build()?;
+        client.request::<EmptyBody>(request).await?;
         Ok(())
     })
     .await

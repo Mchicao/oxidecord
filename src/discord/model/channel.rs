@@ -1,7 +1,10 @@
 //! Guild channels and direct-message conversations.
 
 use twilight_model::channel::ChannelType;
-use twilight_model::id::{Id, marker::ChannelMarker};
+use twilight_model::id::{
+    Id,
+    marker::{ChannelMarker, MessageMarker},
+};
 
 use super::cdn;
 use super::user::small_avatar_url;
@@ -40,6 +43,8 @@ pub struct Channel {
     /// Whether the current user holds `USE_EXTERNAL_EMOJIS` here. Nitro is
     /// needed as well before another guild's emoji can be sent.
     pub can_use_external_emoji: bool,
+    /// The newest message, which decides whether the channel is unread.
+    pub last_message_id: Option<Id<MessageMarker>>,
 }
 
 /// A 1:1 or group direct-message conversation from the user's DM list.
@@ -54,6 +59,10 @@ pub struct DirectMessage {
 }
 
 impl DirectMessage {
+    pub fn last_message_id(&self) -> Option<Id<MessageMarker>> {
+        self.last_message_id.and_then(Id::new_checked)
+    }
+
     /// Records a newly arrived message, so the conversation sorts as the most
     /// recently active.
     pub fn record_message(&mut self, message_id: u64) {
@@ -89,6 +98,7 @@ pub(in crate::discord) fn convert_channel(
         can_send,
         can_manage_messages,
         can_use_external_emoji,
+        last_message_id: channel.last_message_id.map(Id::cast),
     })
 }
 

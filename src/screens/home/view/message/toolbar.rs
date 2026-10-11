@@ -200,19 +200,33 @@ impl HomeScreen {
                         }),
                 )
             });
-            let menu = menu.item(
-                PopupMenuItem::new("Copy Message Link")
-                    .icon(Icon::default().path("icons/link.svg"))
-                    .on_click({
-                        let screen = screen.clone();
-                        move |_, _, cx| {
-                            if let Some(screen) = screen.upgrade() {
-                                screen
-                                    .update(cx, |this, cx| this.copy_message_link(message_id, cx));
+            let menu = menu
+                .item(
+                    PopupMenuItem::new("Mark Unread")
+                        .icon(Icon::default().path("icons/mail.svg"))
+                        .on_click({
+                            let screen = screen.clone();
+                            move |_, _, cx| {
+                                if let Some(screen) = screen.upgrade() {
+                                    screen.update(cx, |this, cx| this.mark_unread(message_id, cx));
+                                }
                             }
-                        }
-                    }),
-            );
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Copy Message Link")
+                        .icon(Icon::default().path("icons/link.svg"))
+                        .on_click({
+                            let screen = screen.clone();
+                            move |_, _, cx| {
+                                if let Some(screen) = screen.upgrade() {
+                                    screen.update(cx, |this, cx| {
+                                        this.copy_message_link(message_id, cx)
+                                    });
+                                }
+                            }
+                        }),
+                );
             if !can_delete {
                 return menu;
             }
