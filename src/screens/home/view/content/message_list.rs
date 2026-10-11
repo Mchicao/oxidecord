@@ -144,30 +144,29 @@ impl HomeScreen {
             .bottom_0()
             .left_0()
             .w_full()
-            .px(px(MESSAGE_PADDING_X))
+            .pb_3()
+            .justify_center()
             .child(
                 h_flex()
                     .id("jump-to-present-bar")
                     // Keeps the pointer off the messages underneath, which
                     // would otherwise light up and take its clicks.
                     .occlude()
-                    .w_full()
-                    .pl_3()
-                    .pr_1()
-                    .py_1()
-                    .gap_2()
+                    .pl_4()
+                    .pr_1p5()
+                    .py_1p5()
+                    .gap_4()
                     .items_center()
-                    .rounded(radius::CONTROL)
+                    .rounded(radius::CARD)
                     .bg(theme.popover)
                     .border_1()
                     .border_color(depth::ring(cx))
-                    .lit(Level::Overlay, Finish::Subtle, px(36.), radius::CONTROL, cx)
+                    .lit(Level::Overlay, Finish::Subtle, px(44.), radius::CARD, cx)
                     .text_sm()
                     .child(
                         div()
-                            .flex_1()
-                            .text_color(theme.muted_foreground)
-                            .child("You're viewing older messages"),
+                            .text_color(theme.foreground)
+                            .child("You're Viewing Older Messages"),
                     )
                     .when(self.newer_loading, |this| {
                         this.child(Spinner::new().small().color(theme.muted_foreground))
@@ -175,7 +174,7 @@ impl HomeScreen {
                     .child(
                         Button::new("jump-to-present")
                             .label("Jump To Present")
-                            .ghost()
+                            .primary()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.jump_to_present(window, cx);
                             })),

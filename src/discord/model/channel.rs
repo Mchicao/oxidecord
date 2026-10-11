@@ -7,6 +7,7 @@ use twilight_model::id::{
 };
 
 use super::cdn;
+use super::markdown::{self, Inline};
 use super::user::small_avatar_url;
 
 /// The subset of Discord channel types the app knows how to display.
@@ -33,7 +34,9 @@ pub struct Channel {
     pub kind: ChannelKind,
     pub parent_id: Option<Id<ChannelMarker>>,
     pub position: i32,
-    pub topic: Option<String>,
+    /// Parsed for the header's one line, so its newlines are already run
+    /// together.
+    pub topic: Option<Vec<Inline>>,
     /// Whether the current user may post here, resolved from the channel's
     /// overwrites when the channel list is fetched.
     pub can_send: bool,
@@ -97,7 +100,10 @@ pub(in crate::discord) fn convert_channel(
         kind,
         parent_id: channel.parent_id,
         position: channel.position.unwrap_or(0),
-        topic: channel.topic.filter(|topic| !topic.is_empty()),
+        topic: channel
+            .topic
+            .filter(|topic| !topic.trim().is_empty())
+            .map(|topic| markdown::parse_preview(&topic)),
         can_send,
         can_manage_messages,
         can_use_external_emoji,

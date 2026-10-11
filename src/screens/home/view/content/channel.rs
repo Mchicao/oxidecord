@@ -9,6 +9,7 @@ use crate::screens::home::HomeScreen;
 use crate::screens::home::channels::channel_icon_path;
 use crate::ui::theme;
 
+use super::super::markdown::MarkdownOptions;
 use super::{header, header_content, message_list, pane};
 
 impl HomeScreen {
@@ -50,24 +51,21 @@ impl HomeScreen {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(channel.name.clone()),
                 )
-                .when_some(
-                    // Show only the first line and let `truncate` elide the rest.
-                    channel
-                        .topic
-                        .as_deref()
-                        .and_then(|topic| topic.lines().find(|line| !line.trim().is_empty()))
-                        .map(str::to_owned),
-                    |this, topic| {
-                        this.child(Divider::vertical().h(px(24.))).child(
-                            div()
-                                .flex_1()
-                                .truncate()
-                                .text_sm()
-                                .text_color(theme::secondary_text(cx))
-                                .child(topic),
-                        )
-                    },
-                ),
+                .when_some(channel.topic.as_ref(), |this, topic| {
+                    this.child(Divider::vertical().h(px(24.))).child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme::secondary_text(cx))
+                            .child(self.render_inline_markdown(
+                                topic,
+                                MarkdownOptions::new(format!("topic-{}", channel.id), &[]),
+                                cx,
+                            )),
+                    )
+                }),
             cx,
         )
     }
