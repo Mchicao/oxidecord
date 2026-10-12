@@ -7,7 +7,9 @@ mod message_list;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, input::Input, v_flex,
+};
 
 use crate::screens::home::{HomeScreen, View};
 use crate::ui::depth::radius;
@@ -87,6 +89,23 @@ pub(super) fn header_content() -> Stateful<Div> {
         .when(cfg!(target_os = "windows"), |this| {
             this.window_control_area(WindowControlArea::Drag)
         })
+}
+
+/// Width of the message search box in the header.
+const SEARCH_WIDTH: f32 = 200.;
+
+impl HomeScreen {
+    /// The message search box at the right of a conversation's header.
+    /// Only there to be drawn for now: typing in it searches nothing.
+    pub(super) fn render_search_box(&self, cx: &App) -> impl IntoElement {
+        div().w(px(SEARCH_WIDTH)).flex_shrink_0().child(
+            Input::new(&self.search_input).small().suffix(
+                Icon::new(IconName::Search)
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
+            ),
+        )
+    }
 }
 
 /// A conversation pane whose header has nothing to name — while a guild loads,

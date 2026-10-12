@@ -3,6 +3,7 @@
 mod composer;
 mod content;
 mod markdown;
+mod member_list;
 mod message;
 mod profile;
 mod rail;
@@ -35,6 +36,10 @@ impl Render for HomeScreen {
         ] {
             scroll.step(window);
         }
+
+        // Follows whichever way the selection changed: a channel click, a
+        // guild switch, the DM view, a voice join.
+        self.sync_member_list();
 
         // Holding shift lays the message toolbar's hidden actions out inline;
         // modifier changes don't repaint on their own, so the listener below

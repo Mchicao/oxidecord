@@ -21,13 +21,14 @@ use crate::platform::runtime;
 use twilight_model::util::Timestamp;
 
 use super::model::{
-    ChannelLatest, GuildEmoji, GuildUnreads, Message, MuteSettings, PresenceStatus,
-    RawChannelUnread, RawEmoji, RawGuildChannel, RawGuildSettings, RawMember, RawReadState,
-    RawRole, RawVoiceServer, RawVoiceState, ReactionEmoji, ReadState, Role, StreamServerInfo,
-    VoiceServerInfo, VoiceUserState, convert_channel_unreads, convert_guild_emoji,
-    convert_guild_unreads, convert_guild_voice_states, convert_message, convert_mute_settings,
-    convert_reaction_emoji, convert_read_states, convert_role, convert_stream_server,
-    convert_voice_server, convert_voice_state, parse_user_settings, versioned_list,
+    ChannelLatest, GuildEmoji, GuildUnreads, MemberListUpdate, Message, MuteSettings,
+    PresenceStatus, RawChannelUnread, RawEmoji, RawGuildChannel, RawGuildSettings, RawMember,
+    RawMemberListUpdate, RawReadState, RawRole, RawVoiceServer, RawVoiceState, ReactionEmoji,
+    ReadState, Role, StreamServerInfo, VoiceServerInfo, VoiceUserState, convert_channel_unreads,
+    convert_guild_emoji, convert_guild_unreads, convert_guild_voice_states,
+    convert_member_list_update, convert_message, convert_mute_settings, convert_reaction_emoji,
+    convert_read_states, convert_role, convert_stream_server, convert_voice_server,
+    convert_voice_state, parse_user_settings, versioned_list,
 };
 
 /// A message received live over the gateway, tagged with the channel it
@@ -129,6 +130,9 @@ pub enum GatewayEvent {
         user_id: Id<UserMarker>,
         roles: Vec<Id<RoleMarker>>,
     },
+    /// A change to a channel member list the session is subscribed to; see
+    /// [`GatewaySender::subscribe_member_list`].
+    MemberList(MemberListUpdate),
     /// Other users' statuses: friends' and guild members' from `READY` and
     /// `READY_SUPPLEMENTAL`, then each change from `PRESENCE_UPDATE`.
     Presences(Vec<(Id<UserMarker>, PresenceStatus)>),
@@ -277,6 +281,35 @@ impl GatewaySender {
             });
             let _ = self.inner.send(payload.to_string());
         }
+    }
+
+    /// Sends `GUILD_SUBSCRIPTIONS_BULK` (opcode 37): subscribes to the
+    /// member list of `channel_id`, in the index ranges given (inclusive,
+    /// a hundred apiece, as Discord's client asks). Replaces the guild's
+    /// earlier channel subscription. Discord answers with a
+    /// `GUILD_MEMBER_LIST_UPDATE` syncing each range, then keeps them current.
+    ///
+    /// Undocumented; the other flags are what Discord's own client sends.
+    pub fn subscribe_member_list(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        ranges: &[[usize; 2]],
+    ) {
+        let payload = serde_json::json!({
+            "op": 37,
+            "d": {
+                "subscriptions": {
+                    guild_id.to_string(): {
+                        "typing": true,
+                        "activities": true,
+                        "threads": true,
+                        "channels": { channel_id.to_string(): ranges },
+                    }
+                }
+            }
+        });
+        let _ = self.inner.send(payload.to_string());
     }
 
     /// Sends `STREAM_DELETE` (opcode 19): stops streaming, or stops watching
@@ -908,6 +941,9 @@ fn dispatch(
         "GUILD_MEMBERS_CHUNK" => serde_json::from_str::<MembersChunkPayload>(data)
             .map(|chunk| member_roles(chunk.guild_id, chunk.members).collect())
             .unwrap_or_default(),
+        "GUILD_MEMBER_LIST_UPDATE" => serde_json::from_str::<RawMemberListUpdate>(data)
+            .map(|update| vec![GatewayEvent::MemberList(convert_member_list_update(update))])
+            .unwrap_or_default(),
         "READY_SUPPLEMENTAL" => serde_json::from_str::<ReadySupplementalPayload>(data)
             .ok()
             .and_then(|ready| ready.merged_presences)
@@ -1036,6 +1072,7 @@ fn guild_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discord::{MemberGroupKind, MemberListGroup, MemberListItem, MemberListOp};
 
     fn dispatch_json(name: &str, json: &str) -> Vec<GatewayEvent> {
         dispatch(
@@ -1415,5 +1452,88 @@ mod tests {
             GatewayEvent::MemberRoles { user_id, roles, .. }
                 if *user_id == Id::new(4) && roles == &[Id::new(20)]
         )));
+    }
+
+    #[test]
+    fn member_list_update_reads_groups_members_and_edits() {
+        let events = dispatch_json(
+            "GUILD_MEMBER_LIST_UPDATE",
+            r#"{
+                "guild_id": "10",
+                "id": "everyone",
+                "member_count": 3,
+                "online_count": 2,
+                "groups": [{"id": "20", "count": 1}, {"id": "online", "count": 1}, {"id": "offline", "count": 1}],
+                "ops": [
+                    {"op": "SYNC", "range": [0, 99], "items": [
+                        {"group": {"id": "20"}},
+                        {"member": {
+                            "user": {"id": "2", "username": "user2", "global_name": "Two", "avatar": null, "bot": true},
+                            "nick": null,
+                            "roles": ["20"],
+                            "presence": {"status": "dnd", "activities": [
+                                {"type": 0, "name": "Chess"},
+                                {"type": 4, "name": "Custom Status", "state": "busy"}
+                            ]}
+                        }},
+                        {"group": {"id": "offline"}},
+                        {"member": {"user": {"id": "3", "username": "user3"}, "roles": []}}
+                    ]},
+                    {"op": "UPDATE", "index": 3, "item": {"member": {
+                        "user": {"id": "3", "username": "user3"}, "roles": [],
+                        "presence": {"status": "online", "activities": [{"type": 2, "name": "Spotify"}]}
+                    }}},
+                    {"op": "DELETE", "index": 1},
+                    {"op": "INVALIDATE", "range": [100, 199]}
+                ]
+            }"#,
+        );
+        let [GatewayEvent::MemberList(update)] = events.as_slice() else {
+            panic!("GUILD_MEMBER_LIST_UPDATE should yield the update");
+        };
+        assert_eq!(update.guild_id, Id::new(10));
+        assert_eq!(update.list_id, "everyone");
+        assert!(matches!(
+            update.groups.as_slice(),
+            [
+                MemberListGroup { kind: MemberGroupKind::Role(role), count: 1 },
+                MemberListGroup { kind: MemberGroupKind::Online, .. },
+                MemberListGroup { kind: MemberGroupKind::Offline, .. },
+            ] if *role == Id::new(20)
+        ));
+
+        let [
+            MemberListOp::Sync { start: 0, items },
+            MemberListOp::Update {
+                index: 3,
+                item: MemberListItem::Member(updated),
+            },
+            MemberListOp::Delete { index: 1 },
+            MemberListOp::Invalidate {
+                start: 100,
+                end: 199,
+            },
+        ] = update.ops.as_slice()
+        else {
+            panic!("each op should be read in order");
+        };
+        let [
+            MemberListItem::Group(_),
+            MemberListItem::Member(two),
+            MemberListItem::Group(_),
+            MemberListItem::Member(three),
+        ] = items.as_slice()
+        else {
+            panic!("the sync should hold two headers and two members");
+        };
+        assert_eq!(two.name, "Two");
+        assert!(two.bot);
+        assert_eq!(two.roles, &[Id::new(20)]);
+        assert_eq!(two.status, PresenceStatus::DoNotDisturb);
+        // The custom status wins over the game.
+        assert_eq!(two.activity.as_deref(), Some("busy"));
+        // No presence reads as offline.
+        assert_eq!(three.status, PresenceStatus::Invisible);
+        assert_eq!(updated.activity.as_deref(), Some("Listening to Spotify"));
     }
 }

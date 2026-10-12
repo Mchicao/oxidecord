@@ -135,6 +135,23 @@ pub(super) struct EmojiPicker {
     pub _search_changed: Subscription,
 }
 
+/// The open guild channel's member list, as far as Discord has synced it.
+pub(super) struct MemberList {
+    pub guild_id: Id<GuildMarker>,
+    pub channel_id: Id<ChannelMarker>,
+    /// The list Discord is sending, from its first sync. Kept across a switch
+    /// to another channel in the guild, since channels the same people can
+    /// see share a list and Discord carries on with it.
+    pub id: Option<String>,
+    pub groups: Vec<discord::MemberListGroup>,
+    /// Every row of the list, headers included, at Discord's indices. `None`
+    /// for a row in a range that isn't synced, drawn as a placeholder.
+    pub rows: Vec<Option<discord::MemberListItem>>,
+    /// The index ranges subscribed to, as last sent.
+    pub ranges: Vec<[usize; 2]>,
+    pub scroll: UniformListScrollHandle,
+}
+
 /// One video attachment or embed in the message list: which playback is
 /// which, and a source of element ids unique across every message on screen.
 ///
@@ -385,6 +402,12 @@ pub struct HomeScreen {
     /// isn't in the guild any more — or a webhook, which never was — isn't
     /// asked for again with every page.
     pub(super) requested_members: HashSet<(Id<GuildMarker>, Id<UserMarker>)>,
+    /// The member list for the open guild channel, while one is open.
+    pub(super) member_list: Option<MemberList>,
+    /// The user closed the member list. Remembered between runs.
+    pub(super) member_list_hidden: bool,
+    /// The message search box in the conversation header. Not wired up yet.
+    pub(super) search_input: Entity<InputState>,
     /// Spoilers clicked open in the open conversation, by the key the view
     /// gives each one. Cleared with the conversation, as Discord hides them
     /// again once you leave.
@@ -418,6 +441,8 @@ impl HomeScreen {
                 .auto_grow(1, COMPOSER_MAX_ROWS)
                 .placeholder("Send a message")
         });
+
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
 
         let composer_changed = cx.subscribe(&message_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -518,6 +543,9 @@ impl HomeScreen {
             requested_members: HashSet::new(),
             guild_emojis: HashMap::new(),
             emoji_picker: None,
+            member_list: None,
+            member_list_hidden: prefs::load().member_list_hidden,
+            search_input,
             revealed_spoilers: HashSet::new(),
             video: None,
             message_input,

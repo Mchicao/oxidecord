@@ -71,7 +71,8 @@ impl HomeScreen {
                             .disabled(true)
                             .tooltip("Video isn't supported yet"),
                     )
-                }),
+                })
+                .child(self.render_search_box(cx)),
             cx,
         )
     }

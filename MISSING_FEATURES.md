@@ -22,7 +22,7 @@
 | Image lightbox and full-size viewer | Missing | |
 | System messages (joins, pins, boosts, calls, thread created, and so on) | Missing | |
 | Pinning and unpinning messages, and the pinned-messages panel | Missing | |
-| Message search (with filters: from, in, has, before, after) | Missing | |
+| Message search (with filters: from, in, has, before, after) | Missing | The header has a search box, but typing in it does nothing yet |
 | Jump to a message (from a reply, a link, or search) | Missing | Clicking a reply quote or a forward's source doesn't open the original |
 | "Jump to present" and the new-messages bar | Missing | |
 | Copy text, copy message ID, and other developer-mode context-menu items | Missing | Only "Copy Message Link" is there |
@@ -46,7 +46,7 @@
 | Mention badges on servers, channels and DMs | Missing | |
 | Server and channel notification settings (all, mentions, nothing, suppress `@everyone`) | Missing | |
 | Muting servers, channels and DMs | Missing | |
-| Member list sidebar with roles, presence and grouping | Missing | |
+| Member list sidebar with roles, presence and grouping | Partial | Guild text and announcement channels only; group DMs and threads show none, and right-clicking a member does nothing |
 | Role icons, server tags and badges next to names | Missing | |
 | Server banner and header dropdown menu | Missing | |
 | Server boosting and boost level perks | Missing | |

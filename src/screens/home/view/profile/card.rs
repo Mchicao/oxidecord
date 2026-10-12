@@ -11,7 +11,7 @@ use crate::screens::home::{HomeScreen, ProfilePopup};
 use crate::ui::depth::{self, Level, radius};
 
 /// Card width. Discord's small popout is 300px wide.
-const CARD_WIDTH: f32 = 300.;
+pub(in crate::screens::home::view) const CARD_WIDTH: f32 = 300.;
 
 /// Banner height with and without a banner image. The shorter one is the strip
 /// of accent colour Discord draws for users who haven't set a banner.

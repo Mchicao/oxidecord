@@ -88,6 +88,8 @@ struct RawMemberUser {
     global_name: Option<String>,
     #[serde(default)]
     avatar: Option<String>,
+    #[serde(default)]
+    bot: bool,
 }
 
 impl RawMember {
@@ -115,6 +117,10 @@ impl RawMember {
         let user = self.user.as_ref()?;
         let hash = user.avatar.as_ref()?;
         Some(cdn::small_avatar_url(user.id.get(), hash))
+    }
+
+    pub(in crate::discord) fn is_bot(&self) -> bool {
+        self.user.as_ref().is_some_and(|user| user.bot)
     }
 }
 

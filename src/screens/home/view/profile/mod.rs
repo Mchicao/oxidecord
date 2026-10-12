@@ -3,6 +3,8 @@
 
 mod card;
 
+pub(super) use card::CARD_WIDTH;
+
 use gpui::*;
 
 use crate::screens::home::HomeScreen;

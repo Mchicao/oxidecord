@@ -29,6 +29,9 @@ pub struct Prefs {
     /// Emoji the user last chose from the picker, newest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_emojis: Vec<RecentEmoji>,
+    /// The user closed the member list beside guild conversations.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub member_list_hidden: bool,
 }
 
 /// An emoji in [`Prefs::recent_emojis`]: a custom one by id, a unicode one as

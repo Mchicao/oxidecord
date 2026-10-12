@@ -2,11 +2,14 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, divider::Divider, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _, divider::Divider, h_flex, v_flex,
+};
 
 use crate::discord::Channel;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::channels::channel_icon_path;
+use crate::ui::button::Button;
 use crate::ui::theme;
 
 use super::super::markdown::MarkdownOptions;
@@ -29,9 +32,24 @@ impl HomeScreen {
             return pane.child(self.render_voice_stage(cx)).into_any_element();
         }
 
-        pane.child(self.render_messages(cx))
-            .child(self.render_message_bar(channel.can_send, cx))
-            .into_any_element()
+        // The member list runs from under the header to the bottom of the
+        // pane, beside the messages and the composer both.
+        let conversation = v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .child(self.render_messages(cx))
+            .child(self.render_message_bar(channel.can_send, cx));
+
+        pane.child(
+            h_flex()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(conversation)
+                .children(self.render_member_list(cx)),
+        )
+        .into_any_element()
     }
 
     fn render_channel_header(&self, channel: &Channel, cx: &Context<Self>) -> impl IntoElement {
@@ -65,6 +83,26 @@ impl HomeScreen {
                                 cx,
                             )),
                     )
+                })
+                // Pushes the controls to the right when there's no topic to
+                // fill the space.
+                .when(channel.topic.is_none(), |this| this.child(div().flex_1()))
+                .when(!channel.kind.is_voice(), |this| {
+                    let hidden = self.member_list_hidden;
+                    this.child(
+                        Button::new("toggle-member-list")
+                            .icon(Icon::default().path("icons/users.svg"))
+                            .ghost()
+                            .small()
+                            .selected(!hidden)
+                            .tooltip(if hidden {
+                                "Show Member List"
+                            } else {
+                                "Hide Member List"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_member_list(cx))),
+                    )
+                    .child(self.render_search_box(cx))
                 }),
             cx,
         )

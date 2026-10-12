@@ -108,6 +108,8 @@ impl HomeScreen {
                 // A member asked for in a session that dropped before
                 // answering is worth asking for again.
                 self.requested_members.clear();
+                // Subscriptions don't outlive the session.
+                self.resubscribe_member_list();
                 cx.notify();
             }
             discord::GatewayEvent::Presences(presences) => {
@@ -226,6 +228,9 @@ impl HomeScreen {
             discord::GatewayEvent::MuteSettings(settings) => {
                 self.unreads.set_mutes(settings);
                 cx.notify();
+            }
+            discord::GatewayEvent::MemberList(update) => {
+                self.apply_member_list_update(update, cx);
             }
             discord::GatewayEvent::MemberRoles {
                 guild_id,
