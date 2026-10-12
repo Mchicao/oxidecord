@@ -31,7 +31,6 @@ struct GuildChannels {
 pub(super) struct Unreads {
     /// The last message the user has read in each channel.
     acked: HashMap<ChannelId, MessageId>,
-    /// The newest message in each channel.
     latest: HashMap<ChannelId, MessageId>,
     guilds: HashMap<GuildId, GuildChannels>,
     /// Which guild each of `guilds`' channels is in.

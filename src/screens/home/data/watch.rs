@@ -126,7 +126,6 @@ impl HomeScreen {
         }
     }
 
-    /// The watched stream, if `stream_key` names it.
     pub(in crate::screens::home) fn watched_stream(
         &mut self,
         stream_key: &str,

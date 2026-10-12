@@ -83,7 +83,6 @@ impl WatchStream {
 enum Outcome {
     /// Stopped by the app, or the decoder went away.
     Stopped,
-    /// The stream ended.
     Ended,
 }
 

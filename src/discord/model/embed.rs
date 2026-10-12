@@ -30,7 +30,6 @@ pub struct Embed {
     pub author: Option<EmbedAuthor>,
     /// Inline formatting only; the whole title is the link when there is one.
     pub title: Option<Vec<Inline>>,
-    /// Where the title links to, when it is a link.
     pub url: Option<String>,
     pub description: Option<Markdown>,
     pub fields: Vec<EmbedField>,
@@ -50,7 +49,6 @@ pub struct Embed {
     pub raw: String,
 }
 
-/// The two shapes an embed is drawn in.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EmbedLayout {
     /// The bordered card with a coloured spine down its left edge: `rich`,
@@ -64,7 +62,6 @@ pub enum EmbedLayout {
 #[derive(Clone)]
 pub struct EmbedAuthor {
     pub name: String,
-    /// The small round icon beside the name.
     pub icon_url: Option<String>,
     pub url: Option<String>,
 }

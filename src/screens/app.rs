@@ -12,7 +12,6 @@ use crate::ui::{dialogs, update_notice};
 /// top-right of every screen's header.
 const NOTIFICATION_TOP: f32 = 52.;
 
-/// Which screen the app is currently showing.
 enum Route {
     Login(Entity<LoginScreen>),
     /// Holds the subscription that sends the user back to login when the

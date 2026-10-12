@@ -31,7 +31,6 @@ use super::voice::{PendingVoice, ScreenShare, StreamWatch, VoiceCall};
 use crate::voice::VoiceEngine;
 use crate::voice::stream::StreamEvent;
 
-/// How many lines the composer grows to before it scrolls.
 const COMPOSER_MAX_ROWS: usize = 12;
 
 /// How many messages from either end of what's loaded the view has to reach
@@ -115,7 +114,6 @@ pub(super) struct Reactors {
     pub _task: Option<Task<()>>,
 }
 
-/// The open emoji picker.
 pub(super) struct EmojiPicker {
     /// Window coordinates of the click that opened it, which the picker sits
     /// beside.
@@ -191,7 +189,6 @@ impl MediaKey {
     }
 }
 
-/// Where a playback is in its life.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum PlaybackState {
     /// Until the first frame lands, which covers both the download and the
@@ -205,10 +202,9 @@ pub(super) enum PlaybackState {
     Failed(String),
 }
 
-/// The one video playing, if any.
-///
-/// Only ever one: decoding a second clip nobody is watching is exactly the
-/// cost this feature exists to avoid, so starting one stops the other.
+/// Only one plays at a time: decoding a second clip nobody is watching is
+/// exactly the cost this feature exists to avoid, so starting one stops the
+/// other.
 pub(super) struct VideoPlayback {
     pub key: MediaKey,
     /// Dropping this stops the decoder, closes the output device, and deletes
@@ -267,7 +263,6 @@ pub struct HomeScreen {
     /// message arrived in a conversation the list didn't have.
     pub(super) dms_refreshing: bool,
     pub(super) collapsed_categories: HashSet<Id<ChannelMarker>>,
-    /// What's unread, across every guild and DM.
     pub(super) unreads: Unreads,
     /// The last message that had been read when the open conversation was
     /// opened, which the "new" divider sits under. `None` when nothing was
@@ -284,9 +279,7 @@ pub struct HomeScreen {
     pub(super) messages: Vec<discord::Message>,
     pub(super) messages_loading: bool,
     pub(super) messages_error: Option<String>,
-    /// An older page is currently being fetched (scrolled to the top).
     pub(super) older_loading: bool,
-    /// The start of the channel's history has been reached; stop fetching.
     pub(super) reached_oldest: bool,
     /// A newer page is being fetched, scrolled down through history that
     /// was opened further back than the present.
@@ -378,7 +371,6 @@ pub struct HomeScreen {
     /// focused on startup: key and modifier events only travel the focus path,
     /// so without it the root's listeners never run.
     pub(super) focus_handle: FocusHandle,
-    /// The profile card currently open over the app, if any.
     pub(super) profile_popup: Option<ProfilePopup>,
     /// Profiles already fetched this session, so reopening a card is instant
     /// and repeated clicks don't refetch.
@@ -392,7 +384,6 @@ pub struct HomeScreen {
     pub(super) guild_roles: HashMap<Id<GuildMarker>, HashMap<Id<RoleMarker>, discord::Role>>,
     /// Every guild's custom emoji, from the gateway, for the emoji picker.
     pub(super) guild_emojis: HashMap<Id<GuildMarker>, Vec<discord::GuildEmoji>>,
-    /// The emoji picker, while it's open.
     pub(super) emoji_picker: Option<EmojiPicker>,
     /// The roles each member holds, by guild, as far as the gateway has told
     /// us. The signed-in user's decide whether a role mention pings them;
@@ -402,7 +393,6 @@ pub struct HomeScreen {
     /// isn't in the guild any more — or a webhook, which never was — isn't
     /// asked for again with every page.
     pub(super) requested_members: HashSet<(Id<GuildMarker>, Id<UserMarker>)>,
-    /// The member list for the open guild channel, while one is open.
     pub(super) member_list: Option<MemberList>,
     /// The user closed the member list. Remembered between runs.
     pub(super) member_list_hidden: bool,
@@ -415,11 +405,9 @@ pub struct HomeScreen {
     pub(super) message_input: Entity<InputState>,
     /// The conversation the typing indicator was last sent to, and when.
     pub(super) typing_sent: Option<(Id<ChannelMarker>, Instant)>,
-    /// Who else is typing, by conversation.
     pub(super) typists: HashMap<Id<ChannelMarker>, Vec<Typist>>,
     pub(super) _composer_changed: Subscription,
     pub(super) messages_list: ListState,
-    /// The video attachment currently playing, if any.
     pub(super) video: Option<VideoPlayback>,
     /// Owns the decoded bitmaps for the currently displayed messages' images.
     /// Cleared on channel switch so image memory doesn't grow without bound.
@@ -461,7 +449,6 @@ impl HomeScreen {
                 if this.at_bottom {
                     this.ack_open_conversation(cx);
                 }
-                // Nearing the oldest loaded message; fetch the previous page.
                 // Far enough ahead that a page usually lands before the scroll
                 // reaches the top, so a continuous scroll up never stalls
                 // against it.

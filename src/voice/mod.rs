@@ -51,16 +51,13 @@ pub struct VoiceConnection {
     pub endpoint: String,
 }
 
-/// What the call reports back to the UI.
 pub enum VoiceEvent {
-    /// The voice connection is up and audio is flowing.
     Connected,
     /// The call ended on its own: the connection dropped, or the user was
     /// disconnected from the far end.
     Disconnected,
     /// Who is transmitting right now, sent whenever the set changes.
     Speaking(HashSet<Id<UserMarker>>),
-    /// The connection could not be established.
     Failed(String),
 }
 

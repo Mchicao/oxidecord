@@ -20,8 +20,6 @@ use std::time::{Duration, Instant};
 /// output callback lays it out for however many channels the device has.
 pub(super) const CHANNELS: usize = 2;
 
-/// Ceiling on the ring.
-///
 /// Deliberately shallow. It is the decoder's only backpressure, so it doubles
 /// as the bound on how far ahead of the speakers decoding may run — and a deep
 /// buffer here is both latency on every seek and memory held for no gain.

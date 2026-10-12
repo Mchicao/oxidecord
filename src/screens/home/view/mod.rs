@@ -18,7 +18,6 @@ use gpui_component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex};
 use super::{HomeScreen, View};
 use crate::ui::depth;
 
-/// Horizontal padding, in pixels, on either side of the message list.
 const MESSAGE_PADDING_X: f32 = 16.;
 
 /// Vertical gap, in pixels, between two consecutive author groups. It sits

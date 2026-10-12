@@ -116,7 +116,6 @@ impl Decoder {
         Ok(Self { transform, format })
     }
 
-    /// Hands one access unit to the decoder.
     fn feed(&mut self, frame: &[u8], time: i64) -> Result<(), String> {
         let sample = (|| unsafe {
             let buffer = MFCreateMemoryBuffer(frame.len() as u32)?;

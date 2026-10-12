@@ -30,7 +30,6 @@ const WIDTH: f32 = 900.;
 const HEIGHT: f32 = 600.;
 const WINDOW_MARGIN: f32 = 64.;
 
-/// Width of the page sidebar inside the popup.
 const SIDEBAR_WIDTH: f32 = 220.;
 
 /// The dialog's own border, one pixel top and bottom, which sits inside the

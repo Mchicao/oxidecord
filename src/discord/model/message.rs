@@ -30,7 +30,6 @@ pub struct Message {
     /// `@here` its author had permission to use. Discord only sets it when the
     /// ping actually went out, so it's what decides the highlight, not the text.
     pub mention_everyone: bool,
-    /// The roles the message pings.
     pub mention_roles: Vec<Id<RoleMarker>>,
     /// When the message was sent, in Unix seconds.
     pub timestamp: i64,
@@ -38,9 +37,7 @@ pub struct Message {
     /// marks with "(edited)" after the content.
     pub edited: Option<i64>,
     pub images: Vec<ImageAttachment>,
-    /// Video attachments, played inline by the platform decoder.
     pub videos: Vec<VideoAttachment>,
-    /// Rich embeds under the content: link previews, bot cards, and so on.
     pub embeds: Vec<Embed>,
     /// The message this one is a reply to, when it references another. Carries
     /// just enough to render the quoted preview above the message.
@@ -156,7 +153,6 @@ pub struct MentionedUser {
     pub avatar_url: Option<String>,
 }
 
-/// One emoji's reaction tally on a message.
 #[derive(Clone)]
 pub struct Reaction {
     pub emoji: ReactionEmoji,
@@ -268,7 +264,6 @@ pub struct ImageAttachment {
     /// inline preview while preserving aspect ratio.
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// Set when the attachment is marked as a spoiler.
     pub spoiler: Option<SpoilerCover>,
 }
 
@@ -306,8 +301,7 @@ pub struct VideoAttachment {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub size: u64,
-    /// Set when the attachment is marked as a spoiler. The cover is a blurred
-    /// poster frame.
+    /// The cover is a blurred poster frame.
     pub spoiler: Option<SpoilerCover>,
 }
 
@@ -515,7 +509,6 @@ fn is_spoiler(attachment: &twilight_model::channel::Attachment) -> bool {
     attachment.filename.starts_with(SPOILER_PREFIX)
 }
 
-/// The filename prefix that marks an attachment as a spoiler.
 pub const SPOILER_PREFIX: &str = "SPOILER_";
 
 /// Whether an attachment is an image we can render inline. Prefers Discord's

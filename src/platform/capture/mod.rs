@@ -15,7 +15,7 @@
 //!
 //! Dropping the capture stops the thread.
 
-#[cfg_attr(windows, path = "windows.rs")]
+#[cfg_attr(windows, path = "windows/mod.rs")]
 #[cfg_attr(not(windows), path = "unsupported.rs")]
 mod backend;
 
@@ -28,7 +28,6 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 pub use backend::CaptureSource;
 
-/// How a capture is encoded.
 #[derive(Clone, Copy)]
 pub struct CaptureSettings {
     /// The largest frame sent. A smaller source is sent at its own size.
@@ -83,7 +82,6 @@ pub fn nal_units(data: &[u8]) -> Vec<&[u8]> {
         .collect()
 }
 
-/// What a running capture reports back.
 pub enum CaptureEvent {
     /// The source is open and frames will follow at this size.
     Started {
@@ -116,7 +114,6 @@ impl Control {
     }
 }
 
-/// Whether this machine can capture its screen at all.
 pub fn is_supported() -> bool {
     backend::is_supported()
 }
@@ -139,7 +136,6 @@ pub fn pick_source(
     backend::pick(handle.hwnd.get())
 }
 
-/// One running capture.
 pub struct ScreenCapture {
     control: Arc<Control>,
 }

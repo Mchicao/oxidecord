@@ -18,13 +18,11 @@ use twilight_model::id::{
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 
-/// Where a call is in its lifecycle.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum VoiceStatus {
     /// Waiting on the gateway for the voice server, then on the handshake with
     /// it.
     Connecting,
-    /// Connected to the voice server, audio flowing.
     Connected,
 }
 
@@ -50,7 +48,6 @@ pub(super) struct VoiceCall {
     /// The guild the channel belongs to; `None` for a DM call.
     pub context: Option<String>,
     pub status: VoiceStatus,
-    /// Why the call failed, when it did.
     pub error: Option<String>,
     /// Whether the DM's other members still need ringing. Set when the user
     /// places a DM call, and cleared once the user is connected and the ring goes out:
@@ -132,9 +129,7 @@ pub(super) struct VoiceParticipant {
     /// badge either way.
     pub muted: bool,
     pub deafened: bool,
-    /// Transmitting right now.
     pub speaking: bool,
-    /// Sharing their screen.
     pub streaming: bool,
     pub is_self: bool,
 }

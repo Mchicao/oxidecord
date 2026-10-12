@@ -8,7 +8,6 @@ use crate::discord;
 use crate::screens::home::HomeScreen;
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 
-/// Height of a reaction chip.
 const CHIP_HEIGHT: f32 = 24.;
 
 impl HomeScreen {

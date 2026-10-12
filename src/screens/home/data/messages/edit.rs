@@ -15,7 +15,6 @@ use crate::discord;
 use crate::screens::home::{EditLastMessage, EditingMessage, HomeScreen};
 use crate::ui::depth;
 
-/// How many lines the edit box grows to before it scrolls.
 const EDIT_MAX_ROWS: usize = 16;
 
 impl HomeScreen {

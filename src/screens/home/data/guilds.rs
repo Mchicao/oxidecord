@@ -174,7 +174,6 @@ impl HomeScreen {
         .detach();
     }
 
-    /// Restores the selected guild's collapsed categories from the prefs file.
     fn load_collapsed_categories(&mut self) {
         let Some(guild_id) = self.selected_guild else {
             return;
@@ -219,7 +218,6 @@ impl HomeScreen {
         self.channel_info(self.selected_channel?)
     }
 
-    /// A channel of the loaded guild, by id.
     pub(in crate::screens::home) fn channel_info(&self, id: Id<ChannelMarker>) -> Option<&Channel> {
         self.channel_groups
             .iter()

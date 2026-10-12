@@ -99,7 +99,6 @@ pub struct GuildFolder {
     pub guild_ids: Vec<Id<GuildMarker>>,
 }
 
-/// Decodes the `settings` blob and pulls what the app reads out of it.
 pub(in crate::discord) fn parse_user_settings(settings: &str) -> Result<UserSettings, String> {
     let bytes = base64_decode(settings)
         .ok_or_else(|| "settings-proto blob is not valid base64".to_owned())?;

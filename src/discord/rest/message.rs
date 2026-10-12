@@ -26,9 +26,7 @@ pub const MAX_ATTACHMENT_SIZE: u64 = 10 * 1024 * 1024;
 /// Which page of a channel's history [`fetch_messages`] fetches.
 #[derive(Clone, Copy)]
 pub enum MessagePage {
-    /// The most recent messages.
     Latest,
-    /// The messages just older than this one.
     Before(Id<MessageMarker>),
     /// The messages just newer than this one, which needn't be real — any
     /// snowflake does, an ack's included.

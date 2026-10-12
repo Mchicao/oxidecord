@@ -29,7 +29,6 @@ use futures::channel::mpsc::UnboundedSender;
 /// See [`super::video`]'s own limit for why this is small.
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-/// One decoded picture.
 pub struct DecodedFrame {
     pub width: u32,
     pub height: u32,

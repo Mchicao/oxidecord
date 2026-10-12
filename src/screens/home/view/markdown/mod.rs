@@ -32,10 +32,8 @@ const EDITED_MARKER_SIZE: f32 = 10.;
 const JUMBO_SIZE: f32 = 48.;
 /// The width a list's markers are set in, so item text lines up down a list.
 const LIST_MARKER_WIDTH: f32 = 20.;
-/// Vertical space between blocks.
 const BLOCK_GAP: f32 = 4.;
 
-/// How a piece of markdown is drawn.
 pub(super) struct MarkdownOptions<'a> {
     /// Seeds element ids and spoiler keys, so it has to be unique across the
     /// message list.
@@ -81,7 +79,6 @@ impl<'a> MarkdownOptions<'a> {
     }
 }
 
-/// The theme colours markdown is drawn in.
 struct Palette {
     link: Hsla,
     mention: Hsla,
@@ -180,7 +177,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// An element id for the next run of text.
     fn next_id(&self) -> ElementId {
         let index = self.next_text.replace(self.next_text.get() + 1);
         ElementId::NamedInteger(self.options.scope.clone(), index as u64)

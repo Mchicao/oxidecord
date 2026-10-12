@@ -22,7 +22,6 @@ use super::RawRole;
 /// Milliseconds from the Unix epoch to Discord's, which snowflakes count from.
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 
-/// How far the user has read one channel.
 pub struct ReadState {
     pub channel_id: Id<ChannelMarker>,
     pub last_message_id: Id<MessageMarker>,

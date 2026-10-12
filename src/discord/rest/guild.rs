@@ -32,8 +32,6 @@ pub async fn fetch_channels(
     owner: bool,
 ) -> Result<Vec<Channel>, String> {
     request(move |client| async move {
-        // The member object tells us which roles the user has, so
-        // role-specific channel overwrites can be matched.
         let (member, channels) = tokio::try_join!(
             async {
                 anyhow::Ok(

@@ -21,7 +21,6 @@ use crate::screens::home::voice::{PendingVoice, VoiceCall, VoiceParticipant, Voi
 use crate::voice::{VoiceConnection, VoiceEvent};
 
 impl HomeScreen {
-    /// Whether the active call is in this channel.
     pub(in crate::screens::home) fn in_voice_channel(&self, channel_id: Id<ChannelMarker>) -> bool {
         self.voice
             .as_ref()
@@ -417,7 +416,6 @@ impl HomeScreen {
         cx.notify();
     }
 
-    /// Applies what the call reports back.
     pub(in crate::screens::home) fn handle_voice_event(
         &mut self,
         event: VoiceEvent,

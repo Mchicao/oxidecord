@@ -43,7 +43,6 @@ pub enum RecentEmoji {
     Unicode(String),
 }
 
-/// Reads the preferences file, or returns the defaults if it isn't there yet.
 pub fn load() -> Prefs {
     file_path()
         .and_then(|path| fs::read_to_string(path).ok())
@@ -51,7 +50,6 @@ pub fn load() -> Prefs {
         .unwrap_or_default()
 }
 
-/// Writes `prefs` back out, creating the config directory if needed.
 pub fn save(prefs: &Prefs) {
     let Some(path) = file_path() else {
         return;
@@ -76,7 +74,6 @@ pub fn update(edit: impl FnOnce(&mut Prefs)) {
     save(&prefs);
 }
 
-/// The per-user config directory, following each platform's convention.
 fn file_path() -> Option<PathBuf> {
     let dir = if cfg!(target_os = "windows") {
         PathBuf::from(std::env::var_os("APPDATA")?)

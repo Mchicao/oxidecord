@@ -30,7 +30,6 @@ const NAL_SPS: u8 = 7;
 const NAL_STAP_A: u8 = 24;
 const NAL_FU_A: u8 = 28;
 
-/// One reassembled frame.
 pub(super) struct Frame {
     /// Annex B, four-byte start codes.
     pub data: Vec<u8>,

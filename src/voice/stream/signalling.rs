@@ -653,7 +653,6 @@ impl Signalling {
     }
 }
 
-/// The stream's DAVE state.
 pub(super) struct Dave {
     user_id: u64,
     /// DAVE's channel id for a stream is the stream server's id less one —
@@ -718,7 +717,6 @@ impl Dave {
         }
     }
 
-    /// Whether frames can be sent right now.
     pub(super) fn is_ready(&self) -> bool {
         self.protocol_version == 0 || self.session.as_ref().is_some_and(DaveSession::is_ready)
     }

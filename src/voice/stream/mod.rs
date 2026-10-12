@@ -65,7 +65,6 @@ impl StreamConnection {
     }
 }
 
-/// What a stream reports back.
 pub enum StreamEvent {
     /// The screen is going out.
     Live { stream_key: String },

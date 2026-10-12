@@ -32,11 +32,9 @@ const CARD_PADDING_TOP: f32 = 8.;
 const CARD_PADDING_BOTTOM: f32 = 16.;
 const CARD_PADDING_RIGHT: f32 = 16.;
 const CARD_PADDING_LEFT: f32 = 12.;
-/// The coloured spine down the card's left edge.
 const SPINE_WIDTH: f32 = 4.;
 /// The square the top-right thumbnail is fitted into.
 const THUMBNAIL_BOX: f32 = 80.;
-/// Vertical gap between the card's rows.
 const ROW_GAP: f32 = 8.;
 /// The large image gets twice the usual gap above it, so it reads as its own
 /// block rather than another line of the text column.
@@ -325,9 +323,6 @@ impl HomeScreen {
             })
     }
 
-    /// The debug-only button that copies the embed's raw JSON, revealed while
-    /// the embed is hovered. Release builds don't carry the JSON, so there is
-    /// nothing to render.
     /// The field grid. Discord lays fields over twelve columns: a run of `inline`
     /// fields packs up to three to a row, and anything not inline takes a row of its
     /// own. A row of two splits in half; rows of one or three give each field a
@@ -428,6 +423,9 @@ impl HomeScreen {
             )
     }
 
+    /// The debug-only button that copies the embed's raw JSON, revealed while
+    /// the embed is hovered. Release builds don't carry the JSON, so there is
+    /// nothing to render.
     #[cfg(debug_assertions)]
     fn render_embed_debug_copy(
         &self,

@@ -29,7 +29,7 @@ older than the installed Visual Studio, build through Ninja: `CMAKE_GENERATOR=Ni
 ## Layout
 
 - `src/discord/` — the Discord client: `model/` (app-side types), `rest/` (HTTP calls),
-  `gateway.rs` (live events), `token.rs` (keyring storage). The app's own types are defined
+  `gateway/` (live events), `token.rs` (keyring storage). The app's own types are defined
   here rather than using twilight's directly. `model/markdown/` parses Discord's markdown
   once, when a message or embed is converted; mentions stay ids until the view names them.
 - `src/screens/home/` — the main screen. `state.rs` owns all state; `data/` mutates it and

@@ -33,7 +33,6 @@ use super::{http, runtime};
 /// tag and the download URL for each asset.
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/s1099/oxidecord/releases/latest";
 
-/// The asset to download, as named in the release.
 const ASSET_NAME: &str = "oxidecord.exe";
 
 /// Filename the download is staged under, beside the running binary.
@@ -49,7 +48,6 @@ pub const APPLY_UPDATE_ARG: &str = "--apply-update";
 /// GitHub rejects API requests without one.
 const USER_AGENT: &str = concat!("oxidecord/", env!("CARGO_PKG_VERSION"));
 
-/// The version this build reports and compares releases against.
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Attempts the final rename this many times, in case the app's process is
@@ -64,7 +62,6 @@ pub enum Status {
     #[default]
     Idle,
     Checking,
-    /// The check found the running version to be the newest one.
     UpToDate,
     Available {
         version: SharedString,
@@ -110,7 +107,6 @@ pub fn status(cx: &App) -> Status {
         .unwrap_or_default()
 }
 
-/// Whether self-updating is implemented for this platform at all.
 pub const fn supported() -> bool {
     cfg!(target_os = "windows")
 }
@@ -422,7 +418,6 @@ async fn write_asset(
     Ok(())
 }
 
-/// A path beside the running binary.
 fn sibling_path(name: &str) -> Option<PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join(name))
 }

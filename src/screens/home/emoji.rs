@@ -20,7 +20,6 @@ pub(in crate::screens::home) const RECENT_LIMIT: usize = COLUMNS * 3;
 /// show as tofu, so it's left out of the picker rather than offered broken.
 const NEWEST_EMOJI: emojis::EmojiVersion = emojis::EmojiVersion::new(15, 0);
 
-/// One cell in the picker.
 #[derive(Clone)]
 pub(in crate::screens::home) enum PickerEmoji {
     Unicode(&'static emojis::Emoji),

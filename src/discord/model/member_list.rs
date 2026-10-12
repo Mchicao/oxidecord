@@ -16,7 +16,6 @@ use twilight_model::id::{
 use super::guild::RawMember;
 use super::settings::PresenceStatus;
 
-/// One `GUILD_MEMBER_LIST_UPDATE`.
 pub struct MemberListUpdate {
     pub guild_id: Id<GuildMarker>,
     /// Which list this is: channels that the same people can see share one,
@@ -70,7 +69,6 @@ pub enum MemberListOp {
     },
 }
 
-/// A row of the list: a group's header, or a member under it.
 #[derive(Clone)]
 pub enum MemberListItem {
     /// A header. Discord leaves the count off these, so it reads zero; the
@@ -79,7 +77,6 @@ pub enum MemberListItem {
     Member(ListMember),
 }
 
-/// A member as the list shows them.
 #[derive(Clone)]
 pub struct ListMember {
     pub user_id: Id<UserMarker>,
@@ -168,7 +165,6 @@ struct RawActivity {
     state: Option<String>,
 }
 
-/// Activity type 4.
 const CUSTOM_STATUS: u8 = 4;
 
 pub(in crate::discord) fn convert_member_list_update(raw: RawMemberListUpdate) -> MemberListUpdate {

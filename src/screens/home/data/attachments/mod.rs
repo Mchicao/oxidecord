@@ -27,13 +27,10 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Only intercept paste aimed at the message composer; let every other
-        // input (search, login, …) paste text normally.
         if !self.message_input.focus_handle(cx).is_focused(window) {
             cx.propagate();
             return;
         }
-        // No image on the clipboard: fall through to the input's text paste.
         if !self.paste_attachment_from_clipboard(window, cx) {
             cx.propagate();
         }

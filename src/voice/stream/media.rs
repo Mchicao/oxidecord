@@ -190,11 +190,6 @@ impl Media {
     }
 
     /// Sends one encoded frame, split across as many packets as it takes.
-    ///
-    /// Each NAL unit goes in a packet of its own when it fits, and is split
-    /// into FU-A fragments when it doesn't (RFC 6184, packetization mode 1).
-    /// The marker bit goes on the frame's last packet, which is how a viewer
-    /// knows the frame is complete.
     pub(super) async fn send_frame(&mut self, frame: &[u8], timestamp: Duration) {
         let timestamp = self
             .timestamp_base

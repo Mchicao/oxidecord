@@ -162,7 +162,6 @@ impl HomeScreen {
         }
     }
 
-    /// Applies what the stream connection reports back.
     pub(in crate::screens::home) fn handle_stream_event(
         &mut self,
         event: StreamEvent,

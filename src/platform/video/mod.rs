@@ -46,7 +46,6 @@ const MAX_FRAMES_IN_FLIGHT: usize = 3;
 /// position can never reach it.
 const NO_SEEK: u64 = u64::MAX;
 
-/// One decoded frame, ready to hand to gpui.
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
@@ -57,14 +56,12 @@ pub struct VideoFrame {
     pub position: Duration,
 }
 
-/// What a running player reports back.
 pub enum VideoEvent {
     /// The file is open and decoding has begun; the run time is now known.
     Opened {
         duration: Duration,
     },
     Frame(VideoFrame),
-    /// Playback reached the end of the file.
     Ended,
     /// The download failed, or nothing on the machine could decode the file.
     Failed(String),
@@ -118,8 +115,6 @@ impl Control {
     }
 }
 
-/// A clip being played.
-///
 /// Dropping it ends playback: the decoder thread sees the stop flag, the
 /// output device is closed, and the downloaded file is deleted.
 pub struct VideoPlayer {

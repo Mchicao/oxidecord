@@ -15,7 +15,6 @@ pub struct CurrentUser {
     pub id: Id<UserMarker>,
     /// Display name: the global display name when set, else the username.
     pub name: String,
-    /// The `@handle` username.
     pub username: String,
     pub avatar_url: Option<String>,
     /// Whether they have any tier of Nitro, which is what lets custom emoji be
@@ -28,7 +27,6 @@ pub struct CurrentUser {
 pub struct UserProfile {
     /// Display name: the global display name when set, else the username.
     pub name: String,
-    /// The `@handle` username.
     pub username: String,
     pub avatar_url: Option<String>,
     pub banner_url: Option<String>,
@@ -51,7 +49,6 @@ pub struct Reactor {
     pub id: Id<UserMarker>,
     /// Display name: the global display name when set, else the username.
     pub name: String,
-    /// The `@handle` username.
     pub username: String,
     pub avatar_url: Option<String>,
 }

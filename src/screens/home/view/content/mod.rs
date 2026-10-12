@@ -15,7 +15,6 @@ use crate::screens::home::{HomeScreen, View};
 use crate::ui::depth::radius;
 use crate::ui::window_controls::WindowControls;
 
-/// Height of the conversation header, in pixels.
 const HEADER_HEIGHT: f32 = 48.;
 
 impl HomeScreen {
@@ -91,7 +90,6 @@ pub(super) fn header_content() -> Stateful<Div> {
         })
 }
 
-/// Width of the message search box in the header.
 const SEARCH_WIDTH: f32 = 200.;
 
 impl HomeScreen {

@@ -84,7 +84,6 @@ pub fn init(cx: &mut App) {
     apply(&name, None, cx);
 }
 
-/// The presets, in display order.
 /// Secondary text that's still meant to be read — channel names, a channel's
 /// topic. Presets make `muted_foreground` dim enough for hints and timestamps,
 /// which is too dim for these, so it's pulled part of the way toward the
