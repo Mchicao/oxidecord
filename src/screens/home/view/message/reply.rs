@@ -1,5 +1,6 @@
 //! The quoted line shown above a message that replies to another.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{ActiveTheme as _, h_flex};
 
@@ -63,6 +64,9 @@ impl HomeScreen {
                 div()
                     .flex_shrink_0()
                     .font_weight(FontWeight::SEMIBOLD)
+                    .when_some(self.role_color(reference.author_id), |this, color| {
+                        this.text_color(rgb(color))
+                    })
                     .child(reference.author_name.clone()),
             )
             .child(if reference.content.is_empty() {

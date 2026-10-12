@@ -120,9 +120,10 @@ pub enum GatewayEvent {
         guild_id: Id<GuildMarker>,
         emojis: Vec<GuildEmoji>,
     },
-    /// A guild member's roles, from `READY`, `GUILD_CREATE`, or
-    /// `GUILD_MEMBER_UPDATE`. Not only the signed-in user's — a user session
-    /// is sent other members too — so the receiver picks out its own.
+    /// A guild member's roles, from `READY`, `GUILD_CREATE`,
+    /// `GUILD_MEMBER_UPDATE`, `GUILD_MEMBERS_CHUNK`, or the member a new
+    /// message carries for its author. Not only the signed-in user's: other
+    /// members' roles colour their names.
     MemberRoles {
         guild_id: Id<GuildMarker>,
         user_id: Id<UserMarker>,
@@ -257,6 +258,25 @@ impl GatewaySender {
             "d": { "stream_key": stream_key }
         });
         let _ = self.inner.send(payload.to_string());
+    }
+
+    /// Sends `REQUEST_GUILD_MEMBERS` (opcode 8) for specific users, whose
+    /// members come back as `GUILD_MEMBERS_CHUNK` dispatches. A user session
+    /// is only sent a sliver of each guild's members up front, and fetched
+    /// history carries none, so this is how a message's author gets a role
+    /// colour. Discord takes at most 100 ids a request.
+    pub fn request_members(&self, guild_id: Id<GuildMarker>, user_ids: &[Id<UserMarker>]) {
+        for user_ids in user_ids.chunks(100) {
+            let payload = serde_json::json!({
+                "op": 8,
+                "d": {
+                    "guild_id": [guild_id],
+                    "user_ids": user_ids,
+                    "presences": false,
+                }
+            });
+            let _ = self.inner.send(payload.to_string());
+        }
     }
 
     /// Sends `STREAM_DELETE` (opcode 19): stops streaming, or stops watching
@@ -479,6 +499,14 @@ struct MemberUpdatePayload {
     guild_id: Id<GuildMarker>,
     #[serde(flatten)]
     member: RawMember,
+}
+
+/// `GUILD_MEMBERS_CHUNK`, the answer to [`GatewaySender::request_members`].
+#[derive(Deserialize)]
+struct MembersChunkPayload {
+    guild_id: Id<GuildMarker>,
+    #[serde(default, deserialize_with = "skip_invalid")]
+    members: Vec<RawMember>,
 }
 
 /// `GUILD_ROLE_CREATE` and `GUILD_ROLE_UPDATE`.
@@ -707,12 +735,15 @@ fn dispatch(
                 let nonce = serde_json::from_str::<NoncePayload>(data)
                     .ok()
                     .and_then(|payload| payload.nonce);
-                vec![GatewayEvent::Message(IncomingMessage {
+                let roles = author_roles(&message);
+                std::iter::once(GatewayEvent::Message(IncomingMessage {
                     channel_id: message.channel_id,
                     guild_id: message.guild_id,
                     message: convert_message(message),
                     nonce,
-                })]
+                }))
+                .chain(roles)
+                .collect()
             })
             .unwrap_or_default(),
         // twilight models this dispatch as a partial message, because Discord
@@ -720,12 +751,15 @@ fn dispatch(
         // the updates that do and skips any that don't.
         "MESSAGE_UPDATE" => serde_json::from_str::<twilight_model::channel::Message>(data)
             .map(|message| {
-                vec![GatewayEvent::MessageUpdate(IncomingMessage {
+                let roles = author_roles(&message);
+                std::iter::once(GatewayEvent::MessageUpdate(IncomingMessage {
                     channel_id: message.channel_id,
                     guild_id: message.guild_id,
                     message: convert_message(message),
                     nonce: None,
-                })]
+                }))
+                .chain(roles)
+                .collect()
             })
             .unwrap_or_default(),
         "MESSAGE_DELETE" => serde_json::from_str::<MessageDeletePayload>(data)
@@ -871,6 +905,9 @@ fn dispatch(
         "GUILD_MEMBER_UPDATE" => serde_json::from_str::<MemberUpdatePayload>(data)
             .map(|update| member_roles(update.guild_id, vec![update.member]).collect())
             .unwrap_or_default(),
+        "GUILD_MEMBERS_CHUNK" => serde_json::from_str::<MembersChunkPayload>(data)
+            .map(|chunk| member_roles(chunk.guild_id, chunk.members).collect())
+            .unwrap_or_default(),
         "READY_SUPPLEMENTAL" => serde_json::from_str::<ReadySupplementalPayload>(data)
             .ok()
             .and_then(|ready| ready.merged_presences)
@@ -967,6 +1004,16 @@ fn member_roles(
             user_id,
             roles: member.roles,
         })
+    })
+}
+
+/// The roles of a guild message's author, from the member Discord sends along
+/// with it. Webhooks aren't members, so their messages have none.
+fn author_roles(message: &twilight_model::channel::Message) -> Option<GatewayEvent> {
+    Some(GatewayEvent::MemberRoles {
+        guild_id: message.guild_id?,
+        user_id: message.author.id,
+        roles: message.member.as_ref()?.roles.clone(),
     })
 }
 
@@ -1315,5 +1362,58 @@ mod tests {
             r#"{"channel_id": "100", "message_id": "5", "emoji": {"id": null, "name": "👍"}}"#,
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn member_roles_arrive_from_member_chunks_and_messages() {
+        let events = dispatch_json(
+            "GUILD_MEMBERS_CHUNK",
+            r#"{
+                "guild_id": "10",
+                "members": [{"user": {"id": "2"}, "roles": ["20", "30"]}],
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "not_found": ["3"]
+            }"#,
+        );
+        let [
+            GatewayEvent::MemberRoles {
+                guild_id,
+                user_id,
+                roles,
+            },
+        ] = events.as_slice()
+        else {
+            panic!("GUILD_MEMBERS_CHUNK should yield each member's roles");
+        };
+        assert_eq!((*guild_id, *user_id), (Id::new(10), Id::new(2)));
+        assert_eq!(roles, &[Id::new(20), Id::new(30)]);
+
+        let events = dispatch_json(
+            "MESSAGE_CREATE",
+            r#"{
+                "id": "500",
+                "channel_id": "100",
+                "guild_id": "10",
+                "author": {"id": "4", "username": "user4", "discriminator": "0", "avatar": null},
+                "member": {"roles": ["20"], "joined_at": "2020-01-01T00:00:00+00:00", "deaf": false, "mute": false, "flags": 0},
+                "content": "hi",
+                "timestamp": "2020-01-01T00:00:00+00:00",
+                "edited_timestamp": null,
+                "tts": false,
+                "mention_everyone": false,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": false,
+                "type": 0
+            }"#,
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            GatewayEvent::MemberRoles { user_id, roles, .. }
+                if *user_id == Id::new(4) && roles == &[Id::new(20)]
+        )));
     }
 }

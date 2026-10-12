@@ -105,6 +105,9 @@ impl HomeScreen {
                 // Likewise the presences, and anyone who went offline in the
                 // meantime won't be among them.
                 self.user_presences.clear();
+                // A member asked for in a session that dropped before
+                // answering is worth asking for again.
+                self.requested_members.clear();
                 cx.notify();
             }
             discord::GatewayEvent::Presences(presences) => {
@@ -229,10 +232,11 @@ impl HomeScreen {
                 user_id,
                 roles,
             } => {
-                if Some(user_id) == self.self_user_id {
-                    self.self_roles.insert(guild_id, roles);
-                    cx.notify();
-                }
+                self.member_roles
+                    .entry(guild_id)
+                    .or_default()
+                    .insert(user_id, roles);
+                cx.notify();
             }
         }
     }

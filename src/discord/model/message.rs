@@ -203,6 +203,7 @@ impl ReactionEmoji {
 /// quoted preview line atop the reply.
 #[derive(Clone)]
 pub struct MessageReference {
+    pub author_id: Id<UserMarker>,
     pub author_name: String,
     pub author_avatar_url: Option<String>,
     /// A single-line preview of the referenced message's content. Empty when
@@ -222,6 +223,7 @@ impl MessageReference {
             _ => message.content.as_str(),
         };
         Self {
+            author_id: message.author_id,
             author_name: message.author_name.clone(),
             author_avatar_url: message.author_avatar_url.clone(),
             content: single_line_preview(content),
@@ -473,6 +475,7 @@ fn convert_reference(referenced: twilight_model::channel::Message) -> MessageRef
         _ => referenced.content.as_str(),
     };
     MessageReference {
+        author_id: referenced.author.id,
         author_name: referenced
             .author
             .global_name

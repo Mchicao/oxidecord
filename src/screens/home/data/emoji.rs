@@ -250,7 +250,7 @@ impl HomeScreen {
         // Restricted to roles the user doesn't hold: Discord doesn't list
         // these at all.
         if !emoji.roles.is_empty() {
-            let held = self.self_roles.get(&guild_id);
+            let held = self.self_roles(guild_id);
             if !held.is_some_and(|held| emoji.roles.iter().any(|role| held.contains(role))) {
                 return Access::Hidden;
             }

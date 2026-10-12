@@ -35,13 +35,16 @@ pub(in crate::discord) fn convert_guild(guild: twilight_model::user::CurrentUser
     }
 }
 
-/// A guild role, as far as a role mention needs it.
+/// A guild role, as far as a role mention or a coloured name needs it.
 #[derive(Clone)]
 pub struct Role {
     pub id: Id<RoleMarker>,
     pub name: String,
     /// Packed `0xRRGGBB`; `None` for a role without a colour.
     pub color: Option<u32>,
+    /// Higher sits higher in the guild's role list. A member's name takes the
+    /// colour of the highest of their roles that has one.
+    pub position: i64,
 }
 
 /// A role as the gateway sends it, read here rather than through twilight's
@@ -52,6 +55,8 @@ pub(in crate::discord) struct RawRole {
     name: String,
     #[serde(default)]
     color: u32,
+    #[serde(default)]
+    position: i64,
     /// Read for working out which channels count toward a guild's unread
     /// mark; see [`super::read_state`].
     #[serde(default)]
@@ -118,5 +123,6 @@ pub(in crate::discord) fn convert_role(role: RawRole) -> Role {
         id: role.id,
         name: role.name,
         color: (role.color != 0).then_some(role.color),
+        position: role.position,
     }
 }

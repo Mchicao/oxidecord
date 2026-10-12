@@ -286,7 +286,7 @@ impl HomeScreen {
         let roles = self
             .selected_guild
             .filter(|_| self.view == View::Guild)
-            .and_then(|guild_id| self.self_roles.get(&guild_id));
+            .and_then(|guild_id| self.self_roles(guild_id));
         roles.is_some_and(|roles| {
             message
                 .mention_roles
@@ -355,6 +355,9 @@ impl HomeScreen {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
+                                    .when_some(self.role_color(author_id), |this, color| {
+                                        this.text_color(rgb(color))
+                                    })
                                     .child(message.author_name.clone()),
                             )
                             .child(

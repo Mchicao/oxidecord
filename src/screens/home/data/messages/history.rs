@@ -111,6 +111,7 @@ impl HomeScreen {
                         this.reached_oldest = latest && !full;
                         this.reached_newest = latest || !full;
                         this.messages = messages;
+                        this.request_author_members();
                         // Resetting also snaps the bottom-aligned list to the
                         // newest message.
                         this.messages_list.reset(this.messages.len());
@@ -243,6 +244,7 @@ impl HomeScreen {
                     let count = older.len();
                     if count > 0 {
                         this.messages.splice(0..0, older);
+                        this.request_author_members();
                         this.messages_list.splice(0..0, count);
                         // The divider may now belong above what was the
                         // oldest row, which was measured without it.
@@ -299,6 +301,7 @@ impl HomeScreen {
                         }
                         let ix = this.messages.len();
                         this.messages.extend(newer);
+                        this.request_author_members();
                         this.splice_messages(ix..ix, count);
                         this.at_bottom = false;
                     }

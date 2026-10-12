@@ -46,6 +46,9 @@ pub(super) enum View {
     DirectMessages,
 }
 
+/// The roles each member of one guild holds.
+pub(super) type MemberRoles = HashMap<Id<UserMarker>, Vec<Id<RoleMarker>>>;
+
 /// The message a pending reply is aimed at, shown as a banner above the
 /// message bar. Kept minimal: enough to label the banner and reference the
 /// target when the reply is sent.
@@ -374,9 +377,14 @@ pub struct HomeScreen {
     pub(super) guild_emojis: HashMap<Id<GuildMarker>, Vec<discord::GuildEmoji>>,
     /// The emoji picker, while it's open.
     pub(super) emoji_picker: Option<EmojiPicker>,
-    /// The roles the signed-in user holds in each guild, which decide whether
-    /// a role mention pings them.
-    pub(super) self_roles: HashMap<Id<GuildMarker>, Vec<Id<RoleMarker>>>,
+    /// The roles each member holds, by guild, as far as the gateway has told
+    /// us. The signed-in user's decide whether a role mention pings them;
+    /// everyone's colour their names.
+    pub(super) member_roles: HashMap<Id<GuildMarker>, MemberRoles>,
+    /// Members already asked of the gateway this session, so an author who
+    /// isn't in the guild any more — or a webhook, which never was — isn't
+    /// asked for again with every page.
+    pub(super) requested_members: HashSet<(Id<GuildMarker>, Id<UserMarker>)>,
     /// Spoilers clicked open in the open conversation, by the key the view
     /// gives each one. Cleared with the conversation, as Discord hides them
     /// again once you leave.
@@ -506,7 +514,8 @@ impl HomeScreen {
             profile_cache: HashMap::new(),
             reactors: HashMap::new(),
             guild_roles: HashMap::new(),
-            self_roles: HashMap::new(),
+            member_roles: HashMap::new(),
+            requested_members: HashSet::new(),
             guild_emojis: HashMap::new(),
             emoji_picker: None,
             revealed_spoilers: HashSet::new(),

@@ -7,7 +7,6 @@
 | Syntax highlighting in code blocks | Missing | Code blocks and inline code render as plain monospace; the language tag is parsed but unused |
 | Local time zone for timestamps | Partial | Message times are local; `<t:…>` markup, embed footers and snowflake dates (member since) are still UTC |
 | Global display names in mentions | Partial | twilight's `Mention` model drops `global_name`, so a mention shows the nickname or username |
-| Viewing who reacted | Missing | |
 | Super reactions (burst) | Missing | |
 | Autocomplete for `@mentions`, `#channels`, `:emoji:` in the composer | Missing | |
 | Slash commands and app commands | Missing | |
@@ -48,7 +47,6 @@
 | Server and channel notification settings (all, mentions, nothing, suppress `@everyone`) | Missing | |
 | Muting servers, channels and DMs | Missing | |
 | Member list sidebar with roles, presence and grouping | Missing | |
-| Role colors on usernames | Missing | |
 | Role icons, server tags and badges next to names | Missing | |
 | Server banner and header dropdown menu | Missing | |
 | Server boosting and boost level perks | Missing | |
@@ -130,9 +128,8 @@
 
 | Feature | Status | Notes |
 |---|---|---|
-| Logging out and switching accounts | Missing | |
+| Switching accounts | Missing | Logging out works; there is no multi-account switcher |
 | Two-factor login (TOTP, SMS, passkey) on the token path | Partial | The webview login handles this through Discord's own page |
-| QR code login | Missing | Webview may cover it |
 | My Account settings (username, email, password, 2FA) | Missing | |
 | Profile editing (avatar, banner, bio, pronouns, display name) | Missing | |
 | Privacy and safety settings (DM filters, message requests) | Missing | |
