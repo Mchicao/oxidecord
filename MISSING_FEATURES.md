@@ -97,7 +97,7 @@
 | Video calls (camera) | Missing | Button present but disabled |
 | Screen sharing (Go Live) | Partial | Windows only, video only: no stream audio. Fixed at 720p30; no quality picker. The stream ends if Discord moves it to another server |
 | Watching streams | Partial | Windows only, video only: no stream audio. One stream at a time, on the call stage; no preview thumbnail on the stream tile, no pop-out, fullscreen or quality picker |
-| Output device selection | Done | Right-click the deafen button (call bar or user panel) picks the speaker by stable device id, remembered between runs, with the system default as the fallback. Switching on a live call reopens the streams, so there is a brief local interruption; no hotplug recovery mid-call |
+| Output device selection | Missing | Only an input device picker |
 | Input and output volume sliders | Missing | |
 | Per-user volume and local mute | Missing | |
 | Push to talk and keybinds | Missing | |
