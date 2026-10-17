@@ -109,7 +109,7 @@
 | Soundboard | Missing | |
 | Activities (embedded apps in voice) | Missing | |
 | Incoming call ringing and accept or decline UI | Missing | |
-| Join and leave sound effects | Missing | |
+| Join and leave sound effects | Partial | Original native cues for confirmed joins, leaves, and peers in the active call; settings switch and self-deafen respected. NOT TESTED YET in running app. |
 | Voice channel text chat | Missing | |
 | Picture-in-picture and pop-out call window | Missing | |
 | Voice region override | Missing | |
