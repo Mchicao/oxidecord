@@ -124,7 +124,7 @@ impl HomeScreen {
             .when(in_voice, |this| this.child(voice_badge(cx)))
             .when(unread, |this| this.child(unread_pill(RAIL_GUTTER, cx)))
             .when(in_voice, |this| {
-                this.tooltip(voice_tooltip(guild_id, guild_name.clone(), cx))
+                this.hoverable_tooltip(voice_tooltip(guild_id, guild_name.clone(), cx))
             })
             .when(!in_voice, |this| this.tooltip(tooltip::text(guild_name)))
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -297,10 +297,10 @@ fn voice_tooltip(
 const TOOLTIP_AVATARS: usize = 5;
 
 /// Roughly how tall the voice tooltip is, for its lighting.
-const TOOLTIP_HEIGHT: f32 = 56.;
+const TOOLTIP_HEIGHT: f32 = 72.;
 
 /// The avatar row's disc size, ring included.
-const TOOLTIP_AVATAR_SIZE: f32 = 22.;
+const TOOLTIP_AVATAR_SIZE: f32 = 28.;
 
 struct GuildVoiceTooltip {
     screen: Entity<HomeScreen>,
@@ -334,25 +334,16 @@ impl Render for GuildVoiceTooltip {
             .read(cx)
             .guild_voice_presence(self.guild_id, TOOLTIP_AVATARS);
         let extra = total - participants.len();
-        // The avatars' text alternative: this gpui carries no accessibility
-        // API to label them with, so the tooltip says who's shown and how
-        // many there are.
-        let names = participants
-            .iter()
-            .map(|participant| participant.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
         // Wrapped, so the margin that keeps it clear of the cursor isn't part
         // of the lit box — as `ui::tooltip` does.
         div().child(
             v_flex()
                 .m_3()
                 .max_w(px(240.))
-                .gap_1p5()
-                .bg(theme.foreground)
+                .gap_2()
+                .bg(theme.popover)
                 .lit(
-                    Level::RaisedStrong,
+                    Level::Overlay,
                     Finish::Matte,
                     px(TOOLTIP_HEIGHT),
                     radius::ITEM,
@@ -361,37 +352,29 @@ impl Render for GuildVoiceTooltip {
                 .px_3()
                 .py_2()
                 .font_family(theme.font_family.clone())
-                .text_xs()
-                .text_color(theme.background)
+                .text_size(px(14.))
+                .text_color(theme.popover_foreground)
                 .child(
                     div()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::BOLD)
                         .truncate()
                         .child(self.guild_name.clone()),
                 )
                 .when(!participants.is_empty(), |this| {
                     this.child(
                         h_flex()
-                            .gap_1p5()
+                            .gap_2()
                             .items_center()
                             .child(
                                 Icon::default()
                                     .path("icons/volume-2.svg")
-                                    .size(px(12.))
+                                    .size(px(20.))
                                     .flex_shrink_0(),
                             )
-                            .child(voice_avatar_row(&participants, theme.foreground))
+                            .child(voice_avatar_row(&participants, theme.popover))
                             .when(extra > 0, |this| {
-                                this.child(overflow_bubble(extra, theme.background))
+                                this.child(overflow_bubble(extra, theme.popover_foreground))
                             }),
-                    )
-                })
-                .when(!names.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .truncate()
-                            .opacity(0.7)
-                            .child(format!("{total} in voice: {names}")),
                     )
                 }),
         )
@@ -402,15 +385,23 @@ impl Render for GuildVoiceTooltip {
 /// tooltip's own fill.
 fn voice_avatar_row(participants: &[VoiceParticipant], ring: Hsla) -> impl IntoElement + use<> {
     h_flex().children(participants.iter().enumerate().map(|(ix, participant)| {
-        super::avatar(
-            participant.name.clone(),
-            participant.avatar_url.clone(),
-            px(TOOLTIP_AVATAR_SIZE),
-        )
-        .rounded_full()
-        .border_2()
-        .border_color(ring)
-        .when(ix > 0, |this| this.ml(px(-6.)))
+        div()
+            .id(("voice-preview-user", participant.user_id.get()))
+            .flex_shrink_0()
+            .rounded_full()
+            .border_2()
+            .border_color(ring)
+            .when(ix > 0, |this| this.ml(px(-8.)))
+            .child(
+                super::avatar(
+                    participant.name.clone(),
+                    participant.avatar_url.clone(),
+                    px(TOOLTIP_AVATAR_SIZE - 4.),
+                )
+                .rounded_full()
+                .border_0(),
+            )
+            .tooltip(tooltip::text(participant.name.clone()))
     }))
 }
 

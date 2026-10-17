@@ -485,36 +485,27 @@ impl HomeScreen {
     /// The state's own name is the guild's nickname for them, so it comes
     /// first, the user's own included. A DM call's states, and guild states
     /// whose member wasn't sent, carry none: the user's own is already loaded,
-    /// and anyone whose profile was opened is cached.
-    fn voice_display_name(&self, state: &discord::VoiceUserState) -> String {
+    /// and anyone whose profile was opened or member row synced is cached.
+    fn voice_participant(&self, state: &discord::VoiceUserState) -> VoiceParticipant {
         let is_self = Some(state.user_id) == self.self_user_id;
         let current = self.current_user.as_ref().filter(|_| is_self);
         let profile = self.profile_cache.get(&state.user_id);
-
-        state
-            .name
-            .clone()
-            .or_else(|| current.map(|user| user.name.clone()))
-            .or_else(|| profile.map(|profile| profile.name.clone()))
-            .unwrap_or_else(|| "Unknown".into())
-    }
-
-    fn voice_participant(&self, state: &discord::VoiceUserState) -> VoiceParticipant {
-        let is_self = Some(state.user_id) == self.self_user_id;
-        let profile = self.profile_cache.get(&state.user_id);
+        let member = self.voice_member(state);
 
         VoiceParticipant {
             user_id: state.user_id,
-            name: self.voice_display_name(state),
+            name: state
+                .name
+                .clone()
+                .or_else(|| member.map(|member| member.name.clone()))
+                .or_else(|| current.map(|user| user.name.clone()))
+                .or_else(|| profile.map(|profile| profile.name.clone()))
+                .unwrap_or_else(|| "Unknown".into()),
             avatar_url: state
                 .avatar_url
                 .clone()
-                .or_else(|| {
-                    self.current_user
-                        .as_ref()
-                        .filter(|_| is_self)
-                        .and_then(|user| user.avatar_url.clone())
-                })
+                .or_else(|| member.and_then(|member| member.avatar_url.clone()))
+                .or_else(|| current.and_then(|user| user.avatar_url.clone()))
                 .or_else(|| profile.and_then(|profile| profile.avatar_url.clone())),
             accent_color: profile.and_then(|profile| profile.accent_color),
             muted: state.self_mute || state.mute,
@@ -523,6 +514,22 @@ impl HomeScreen {
             streaming: state.self_stream,
             is_self,
         }
+    }
+
+    fn voice_member(&self, state: &discord::VoiceUserState) -> Option<&discord::ListMember> {
+        self.member_list
+            .as_ref()
+            .filter(|list| Some(list.guild_id) == state.guild_id)?
+            .rows
+            .iter()
+            .find_map(|row| match row {
+                Some(discord::MemberListItem::Member(member))
+                    if member.user_id == state.user_id =>
+                {
+                    Some(member)
+                }
+                _ => None,
+            })
     }
 }
 
