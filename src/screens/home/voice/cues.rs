@@ -66,7 +66,7 @@ impl CuePolicy {
         } else if after == Some(channel) {
             Some(Cue::PeerJoin)
         } else if before == Some(channel) {
-            Some(Cue::Leave)
+            Some(Cue::PeerLeave)
         } else {
             None
         }
@@ -115,14 +115,14 @@ mod tests {
         let attempt = policy.connecting();
         policy.connected(attempt);
         assert_eq!(policy.peer(None, Some(channel(1))), Some(Cue::PeerJoin));
-        assert_eq!(policy.peer(Some(channel(1)), None), Some(Cue::Leave));
+        assert_eq!(policy.peer(Some(channel(1)), None), Some(Cue::PeerLeave));
         assert_eq!(
             policy.peer(Some(channel(2)), Some(channel(1))),
             Some(Cue::PeerJoin)
         );
         assert_eq!(
             policy.peer(Some(channel(1)), Some(channel(2))),
-            Some(Cue::Leave)
+            Some(Cue::PeerLeave)
         );
         assert_eq!(policy.peer(Some(channel(2)), Some(channel(3))), None);
         // Repeated state, mute/deafen and speaking do not change membership.
@@ -143,5 +143,19 @@ mod tests {
         assert_eq!(policy.connected(reconnect), None);
         assert_eq!(policy.connected(moved), Some(Cue::Join));
         assert_eq!(policy.end(), Some(Cue::Leave));
+    }
+
+    #[test]
+    fn policy_plays_same_original_join_but_distinct_self_and_peer_departures() {
+        let mut policy = CuePolicy::default();
+        policy.request(channel(1));
+        let attempt = policy.connecting();
+        let own_join = policy.connected(attempt).unwrap().clip().unwrap();
+        let peer_join = policy.peer(None, Some(channel(1))).unwrap().clip().unwrap();
+        let peer_leave = policy.peer(Some(channel(1)), None).unwrap().clip().unwrap();
+        let own_leave = policy.end().unwrap().clip().unwrap();
+        assert!(std::ptr::eq(own_join, peer_join));
+        assert!(!std::ptr::eq(own_leave, peer_leave));
+        assert!(!std::ptr::eq(own_join, own_leave));
     }
 }

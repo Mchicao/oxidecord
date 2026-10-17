@@ -1,6 +1,7 @@
 //! Original, output-only voice cues. One bounded worker owns all device I/O;
 //! neither the foreground nor the voice mixer waits for it.
 
+mod clips;
 mod render;
 
 use std::sync::Arc;
@@ -19,6 +20,13 @@ pub enum Cue {
     Join,
     Leave,
     PeerJoin,
+    PeerLeave,
+}
+
+impl Cue {
+    pub(crate) fn clip(self) -> Option<&'static clips::Clip> {
+        clips::get(self)
+    }
 }
 
 #[derive(Clone)]
@@ -143,7 +151,7 @@ impl CuePlayer {
             match cue {
                 Cue::Join => self.own.join.store(epoch, Ordering::Release),
                 Cue::Leave => self.own.leave.store(epoch, Ordering::Release),
-                Cue::PeerJoin => {
+                Cue::PeerJoin | Cue::PeerLeave => {
                     self.play_peer(cue);
                     return;
                 }
@@ -172,6 +180,9 @@ fn play(
     settings: &CueSettings,
     select_output: &impl Fn() -> Option<cpal::Device>,
 ) {
+    let Some(clip) = request.cue.clip() else {
+        return;
+    };
     let Some(device) = select_output() else {
         return;
     };
@@ -187,6 +198,7 @@ fn play(
         build,
         &device,
         config.into(),
+        clip,
         request,
         settings.clone(),
         completion.clone()
@@ -196,7 +208,9 @@ fn play(
     };
     // A broken device must not strand the worker. No polling while idle or playing:
     // callbacks wake this thread, with a finite watchdog only for driver failure.
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now()
+        + Duration::from_secs_f64(clip.frames() as f64 / f64::from(clip.sample_rate))
+        + Duration::from_secs(5);
     while !completion.load(Ordering::Acquire) {
         let now = Instant::now();
         if now >= deadline {
@@ -210,6 +224,7 @@ fn play(
 fn build<T>(
     device: &cpal::Device,
     config: StreamConfig,
+    clip: &'static clips::Clip,
     request: Request,
     settings: CueSettings,
     completion: Arc<AtomicBool>,
@@ -217,7 +232,7 @@ fn build<T>(
 where
     T: SizedSample + FromSample<f32>,
 {
-    let mut renderer = render::Renderer::new(request.cue, config.sample_rate, config.channels);
+    let mut renderer = render::Renderer::new(clip, config.sample_rate, config.channels);
     let worker = thread::current();
     let error_worker = worker.clone();
     let error_completion = completion.clone();
@@ -287,6 +302,9 @@ mod tests {
             settings,
             own: Arc::default(),
         };
+        player.play(Cue::PeerLeave);
+        assert!(player.own.take(None, &player.settings).is_none());
+        assert_eq!(rx.try_recv().unwrap().unwrap().cue, Cue::PeerLeave);
         for _ in 0..100 {
             player.play_peer(Cue::PeerJoin);
         }

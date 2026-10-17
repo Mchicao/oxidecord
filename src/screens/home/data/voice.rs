@@ -610,7 +610,7 @@ mod tests {
         );
         assert_eq!(
             record_voice_state(&mut states, state(None), false, Some(&policy)).1,
-            Some(Cue::Leave)
+            Some(Cue::PeerLeave)
         );
         assert_eq!(
             record_voice_state(&mut states, state(None), false, Some(&policy)).1,
