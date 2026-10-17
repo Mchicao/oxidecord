@@ -146,7 +146,7 @@
 | Streamer mode | Missing | |
 | Developer mode (copy IDs) | Missing | |
 | Local caching of guilds, channels and messages across restarts | Missing | Listed on the README TODO |
-| Offline and reconnecting indicator | Missing | The shard reconnects silently |
+| Offline and reconnecting indicator | Implemented | Native gateway status: connecting, connected only after READY/RESUMED, reconnecting and disconnected; follows Twilight and event-channel termination |
 | Minimize to system tray and run on startup | Missing | |
 | Auto-updater on macOS and Linux | Missing | Windows only |
 | Video playback on macOS and Linux | Missing | `platform/video/unsupported.rs` falls back to the poster card |
