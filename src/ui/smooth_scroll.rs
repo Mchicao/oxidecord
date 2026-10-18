@@ -134,19 +134,19 @@ impl SmoothScroll {
     }
 
     /// Start middle-click autoscroll at the specified position.
-    pub fn start_autoscroll(&mut self, origin: Point<Pixels>, window: &Window) {
+    pub fn start_autoscroll(&mut self, origin: Point<Pixels>) {
+        self.current = self.surface.offset();
+        self.target = self.current;
         self.autoscroll = Some(AutoscrollState {
             origin,
             current: origin,
         });
-        request_step(window.current_view(), Instant::now(), window);
     }
 
     /// Update the current cursor position during autoscroll.
-    pub fn update_autoscroll(&mut self, current: Point<Pixels>, window: &Window) {
+    pub fn update_autoscroll(&mut self, current: Point<Pixels>) {
         if let Some(state) = self.autoscroll.as_mut() {
             state.current = current;
-            request_step(window.current_view(), Instant::now(), window);
         }
     }
 
@@ -160,14 +160,14 @@ impl SmoothScroll {
     pub fn step(&mut self, window: &Window) {
         if let Some(auto) = self.autoscroll {
             let dy = f32::from(auto.current.y - auto.origin.y);
-            let delta = autoscroll_delta(dy);
-            if !delta.is_zero() {
-                self.target =
-                    (self.surface.offset() + delta).clamp(self.surface.min_offset(), px(0.));
+            if let Some(target) =
+                autoscroll_target(self.surface.offset(), self.surface.min_offset(), dy)
+            {
+                self.target = target;
                 self.current = self.target;
                 self.surface.set_offset(self.current);
+                request_step(window.current_view(), Instant::now() + MIN_STEP, window);
             }
-            request_step(window.current_view(), Instant::now() + MIN_STEP, window);
             return;
         }
 
@@ -194,7 +194,9 @@ impl SmoothScroll {
 
         self.current = advance(self.current, self.target);
         self.surface.set_offset(self.current);
-        request_step(window.current_view(), Instant::now() + MIN_STEP, window);
+        if self.current != self.target {
+            request_step(window.current_view(), Instant::now() + MIN_STEP, window);
+        }
     }
 
     /// Overwrite the jump the container's own handler just applied and fold this
@@ -238,6 +240,11 @@ pub(crate) fn autoscroll_delta(dy: f32) -> Pixels {
     px(speed * -sign)
 }
 
+fn autoscroll_target(current: Pixels, min: Pixels, dy: f32) -> Option<Pixels> {
+    let next = (current + autoscroll_delta(dy)).clamp(min, px(0.));
+    (next != current).then_some(next)
+}
+
 /// This event's vertical travel in pixels, and whether it wants easing.
 fn wheel_delta(delta: &ScrollDelta, line_height: Pixels) -> (Pixels, bool) {
     match delta {
@@ -275,6 +282,17 @@ fn request_step(view: EntityId, due: Instant, window: &Window) {
 mod tests {
     use super::{advance, wheel_delta};
     use gpui::{ScrollDelta, point, px};
+
+    #[test]
+    fn autoscroll_rests_in_the_deadzone_and_at_the_edges_then_resumes() {
+        use super::autoscroll_target;
+        assert_eq!(autoscroll_target(px(-50.), px(-100.), 0.), None);
+        assert_eq!(autoscroll_target(px(0.), px(-100.), -60.), None);
+        assert_eq!(autoscroll_target(px(-100.), px(-100.), 60.), None);
+        assert_eq!(autoscroll_target(px(0.), px(0.), 60.), None);
+        assert!(autoscroll_target(px(-100.), px(-100.), -60.).is_some());
+        assert!(autoscroll_target(px(0.), px(-100.), 60.).is_some());
+    }
 
     #[test]
     fn a_glide_spreads_the_distance_then_lands_exactly() {

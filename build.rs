@@ -32,10 +32,9 @@ fn main() {
     generated.push_str("pub static PRESET_THEME_FILES: &[(&str, &str)] = &[\n");
     for path in &files {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        // Forward slashes: `include_str!` takes them on every platform, and a
-        // Windows path would otherwise be full of escape sequences.
-        let path = path.display().to_string().replace('\\', "/");
-        generated.push_str(&format!("    (\"{name}\", include_str!(\"{path}\")),\n"));
+        generated.push_str(&format!(
+            "    ({name:?}, include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/themes/\", {name:?}))),\n"
+        ));
     }
     generated.push_str("];\n");
 

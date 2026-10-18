@@ -107,12 +107,11 @@ impl HomeScreen {
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
                     if this.messages_scroll.is_autoscrolling() {
                         this.messages_scroll.stop_autoscroll();
                     } else {
-                        this.messages_scroll
-                            .start_autoscroll(event.position, window);
+                        this.messages_scroll.start_autoscroll(event.position);
                     }
                     cx.notify();
                 }),
@@ -128,10 +127,9 @@ impl HomeScreen {
                     }
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if this.messages_scroll.is_autoscrolling() {
-                    this.messages_scroll
-                        .update_autoscroll(event.position, window);
+                    this.messages_scroll.update_autoscroll(event.position);
                     cx.notify();
                 }
             }))

@@ -607,13 +607,23 @@ fn preview_guild_voice<'a>(
     self_user_id: Option<Id<UserMarker>>,
     max: usize,
 ) -> (Vec<&'a discord::VoiceUserState>, usize) {
-    let mut matched: Vec<_> = states
+    let mut matched: Vec<&discord::VoiceUserState> = Vec::with_capacity(max);
+    let mut total = 0;
+    let key =
+        |state: &discord::VoiceUserState| (Some(state.user_id) != self_user_id, state.user_id);
+    for state in states
         .into_iter()
         .filter(|state| state.channel_id.is_some() && state.guild_id == Some(guild_id))
-        .collect();
-    let total = matched.len();
-    matched.sort_unstable_by_key(|state| (Some(state.user_id) != self_user_id, state.user_id));
-    matched.truncate(max);
+    {
+        total += 1;
+        let position = matched.partition_point(|candidate| key(candidate) < key(state));
+        if position < max {
+            if matched.len() == max {
+                matched.pop();
+            }
+            matched.insert(position, state);
+        }
+    }
     (matched, total)
 }
 
@@ -797,5 +807,18 @@ mod tests {
         let (ids, total) = preview(&states, 10, None, 5);
         assert_eq!(ids, vec![1, 2, 3, 4, 5]);
         assert_eq!(total, 7);
+    }
+
+    #[test]
+    fn late_participants_keep_the_preview_order_and_empty_caps_keep_the_count() {
+        let states: Vec<_> = (1..=100)
+            .rev()
+            .map(|user| state(user, Some(10), Some(100), None))
+            .collect();
+        assert_eq!(
+            preview(&states, 10, Some(99), 5),
+            (vec![99, 1, 2, 3, 4], 100)
+        );
+        assert_eq!(preview(&states, 10, Some(99), 0), (Vec::new(), 100));
     }
 }
