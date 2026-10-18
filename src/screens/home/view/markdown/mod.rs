@@ -10,7 +10,6 @@ mod inline;
 mod rich_text;
 
 use std::cell::Cell;
-use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder as _;
@@ -110,70 +109,80 @@ impl Palette {
     }
 }
 
-type ActionHandler = Rc<dyn Fn(&Action, &mut Window, &mut App)>;
-
 /// Everything one call to render markdown shares.
 struct Renderer<'a> {
     screen: &'a HomeScreen,
     options: MarkdownOptions<'a>,
     palette: Palette,
     mono_family: SharedString,
-    on_action: ActionHandler,
-    /// Unix seconds, for relative timestamps.
-    now: i64,
+    weak: WeakEntity<HomeScreen>,
+    /// Unix seconds, queried lazily for relative timestamps.
+    now: Cell<Option<i64>>,
     next_text: Cell<usize>,
     next_spoiler: Cell<usize>,
 }
 
 impl<'a> Renderer<'a> {
     fn new(screen: &'a HomeScreen, options: MarkdownOptions<'a>, cx: &Context<HomeScreen>) -> Self {
-        let weak = cx.entity().downgrade();
-        let on_action =
-            Rc::new(
-                move |action: &Action, window: &mut Window, cx: &mut App| match action {
-                    Action::Url(url) => cx.open_url(url),
-                    Action::MaskedUrl(url) => dialogs::confirm_open_link(url.clone(), window, cx),
-                    Action::User {
-                        id,
-                        name,
-                        avatar_url,
-                    } => {
-                        let position = window.mouse_position();
-                        let _ = weak.update(cx, |this, cx| {
-                            this.open_profile(*id, name.clone(), avatar_url.clone(), position, cx)
-                        });
-                    }
-                    Action::Channel(id) => {
-                        let _ = weak.update(cx, |this, cx| {
-                            let is_text = this
-                                .channel_info(*id)
-                                .is_some_and(|channel| !channel.kind.is_voice());
-                            if this.view == View::Guild && is_text {
-                                this.select_channel(*id, window, cx);
-                                cx.notify();
-                            }
-                        });
-                    }
-                    Action::Spoiler(key) => {
-                        let _ = weak.update(cx, |this, cx| {
-                            this.revealed_spoilers.insert(key.clone());
-                            cx.notify();
-                        });
-                    }
-                },
-            );
-
         Self {
             screen,
             options,
             palette: Palette::new(cx),
             mono_family: cx.theme().mono_font_family.clone(),
-            on_action,
-            now: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs() as i64),
+            weak: cx.entity().downgrade(),
+            now: Cell::new(None),
             next_text: Cell::new(0),
             next_spoiler: Cell::new(0),
+        }
+    }
+
+    fn now(&self) -> i64 {
+        if let Some(now) = self.now.get() {
+            return now;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64);
+        self.now.set(Some(now));
+        now
+    }
+
+    fn run_action(
+        weak: &WeakEntity<HomeScreen>,
+        action: &Action,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        match action {
+            Action::Url(url) => cx.open_url(url),
+            Action::MaskedUrl(url) => dialogs::confirm_open_link(url.clone(), window, cx),
+            Action::User {
+                id,
+                name,
+                avatar_url,
+            } => {
+                let position = window.mouse_position();
+                let _ = weak.update(cx, |this, cx| {
+                    this.open_profile(*id, name.clone(), avatar_url.clone(), position, cx)
+                });
+            }
+            Action::Channel(id) => {
+                let _ = weak.update(cx, |this, cx| {
+                    let is_text = this
+                        .channel_info(*id)
+                        .is_some_and(|channel| !channel.kind.is_voice());
+                    if this.view == View::Guild && is_text {
+                        this.select_channel(*id, window, cx);
+                        cx.notify();
+                    }
+                });
+            }
+            Action::Spoiler(key) => {
+                let _ = weak.update(cx, |this, cx| {
+                    this.revealed_spoilers.insert(key.clone());
+                    cx.notify();
+                });
+            }
         }
     }
 

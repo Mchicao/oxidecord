@@ -177,10 +177,23 @@ impl Unreads {
         if self.muted_guilds.contains(&guild_id) {
             return false;
         }
-        self.guilds.get(&guild_id).is_some_and(|guild| {
-            guild.channels.iter().any(|&(channel_id, parent_id)| {
-                !self.is_muted(channel_id, parent_id) && self.is_unread(channel_id)
-            })
+        let Some(guild) = self.guilds.get(&guild_id) else {
+            return false;
+        };
+        let muted = self.muted_channels.get(&Some(guild_id));
+        guild.channels.iter().any(|&(channel_id, parent_id)| {
+            let is_muted = muted.is_some_and(|muted| {
+                muted.contains(&channel_id)
+                    || parent_id.is_some_and(|parent| muted.contains(&parent))
+            });
+            !is_muted
+                && match (
+                    self.latest.get(&channel_id).copied(),
+                    self.acked.get(&channel_id).copied().or(guild.joined),
+                ) {
+                    (Some(latest), Some(acked)) => latest > acked,
+                    _ => false,
+                }
         })
     }
 }
@@ -217,10 +230,12 @@ mod tests {
 
         assert!(unreads.ack(Id::new(10), Id::new(50)));
         assert!(!unreads.is_unread(Id::new(10)));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
         // Acks only go forward unless set outright.
         assert!(!unreads.ack(Id::new(10), Id::new(45)));
         unreads.set_acked(Id::new(10), Id::new(45));
         assert!(unreads.is_unread(Id::new(10)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
     }
 
     #[test]
@@ -232,23 +247,102 @@ mod tests {
         ));
         assert!(!unreads.is_unread(Id::new(10)));
         assert!(unreads.is_unread(Id::new(11)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
+
+        // An explicit ack behind `joined` (e.g. "Mark Unread") overrides the
+        // `joined` fallback for both channel and guild unread checks.
+        assert!(unreads.ack(Id::new(11), Id::new(25)));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
+        unreads.set_acked(Id::new(10), Id::new(10));
+        assert!(unreads.is_unread(Id::new(10)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
+    }
+
+    #[test]
+    fn unknown_ack_without_joined_is_read_until_live_message_or_read_state() {
+        let mut unreads = Unreads::default();
+        unreads.set_guild(guild(None, &[(10, None, Some(50)), (11, None, None)]));
+        assert_eq!(unreads.acked(Id::new(10)), None);
+        assert!(!unreads.is_unread(Id::new(10)));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
+
+        // A live message in a channel with no prior ack anchors the ack at the
+        // previous latest message, making both the channel and guild unread.
+        unreads.note_message(Id::new(10), Id::new(60));
+        assert_eq!(unreads.acked(Id::new(10)), Some(Id::new(50)));
+        assert!(unreads.is_unread(Id::new(10)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
     }
 
     #[test]
     fn mutes_hide_a_guilds_mark() {
         let mut unreads = Unreads::default();
-        unreads.set_guild(guild(Some(1), &[(10, Some(5), Some(50))]));
+        unreads.set_guild(guild(
+            Some(1),
+            &[(10, Some(5), Some(50)), (11, None, Some(50))],
+        ));
         assert!(unreads.is_guild_unread(Id::new(1)));
 
+        // Muting category 5 hides channel 10, but unmuted channel 11 still
+        // marks the guild unread.
         unreads.set_mutes(vec![MuteSettings {
             guild_id: Some(Id::new(1)),
             muted: false,
             muted_channels: vec![Id::new(5)],
         }]);
         assert!(unreads.is_muted(Id::new(10), Some(Id::new(5))));
+        assert!(!unreads.is_muted(Id::new(11), None));
+        assert!(unreads.is_guild_unread(Id::new(1)));
+
+        // Muting channel 11 directly clears the guild mark while both channels
+        // remain unread on their own.
+        unreads.set_mutes(vec![MuteSettings {
+            guild_id: Some(Id::new(1)),
+            muted: false,
+            muted_channels: vec![Id::new(5), Id::new(11)],
+        }]);
         assert!(!unreads.is_guild_unread(Id::new(1)));
-        // Muting doesn't make the channel itself read.
         assert!(unreads.is_unread(Id::new(10)));
+        assert!(unreads.is_unread(Id::new(11)));
+
+        // Muting the guild itself hides the guild mark even when channel mutes
+        // are removed, and unmuting the guild restores it.
+        unreads.set_mutes(vec![MuteSettings {
+            guild_id: Some(Id::new(1)),
+            muted: true,
+            muted_channels: Vec::new(),
+        }]);
+        assert!(!unreads.is_muted(Id::new(10), Some(Id::new(5))));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
+
+        unreads.set_mutes(vec![MuteSettings {
+            guild_id: Some(Id::new(1)),
+            muted: false,
+            muted_channels: Vec::new(),
+        }]);
+        assert!(unreads.is_guild_unread(Id::new(1)));
+    }
+
+    #[test]
+    fn rebinding_guild_and_live_read_states_update_unread_without_stale_channels() {
+        let mut unreads = Unreads::default();
+        unreads.set_guild(guild(Some(10), &[(10, None, Some(50))]));
+        assert!(unreads.is_guild_unread(Id::new(1)));
+
+        // Rebinding guild 1 without channel 10 unbinds channel 10 from the
+        // guild's `joined` fallback and recomputes the guild from its new list.
+        unreads.set_guild(guild(Some(40), &[(20, None, Some(30))]));
+        assert_eq!(unreads.acked(Id::new(10)), None);
+        assert!(!unreads.is_unread(Id::new(10)));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
+
+        // Live read states arriving afterwards immediately update guild unread.
+        unreads.set_read_states(vec![ReadState {
+            channel_id: Id::new(20),
+            last_message_id: Id::new(25),
+        }]);
+        assert!(unreads.is_unread(Id::new(20)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
     }
 
     #[test]

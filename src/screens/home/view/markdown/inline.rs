@@ -147,15 +147,16 @@ impl<'a, 'b> Flattener<'a, 'b> {
             text = text.marker(marker);
         }
         if renderer.options.interactive {
-            let (ranges, actions): (Vec<_>, Vec<_>) = self.actions.into_iter().unzip();
-            let on_action = renderer.on_action.clone();
-            text = text
-                .on_click(ranges, move |ix, window, cx| {
+            if !self.actions.is_empty() {
+                let (ranges, actions): (Vec<_>, Vec<_>) = self.actions.into_iter().unzip();
+                let weak = renderer.weak.clone();
+                text = text.on_click(ranges, move |ix, window, cx| {
                     if let Some(action) = actions.get(ix) {
-                        on_action(action, window, cx);
+                        Renderer::run_action(&weak, action, window, cx);
                     }
-                })
-                .tooltips(self.tooltips);
+                });
+            }
+            text = text.tooltips(self.tooltips);
         }
         text
     }
@@ -273,7 +274,7 @@ impl<'a, 'b> Flattener<'a, 'b> {
                 }
             }
             Inline::Timestamp(timestamp) => {
-                let shown = timestamp.display(self.renderer.now);
+                let shown = timestamp.display(self.renderer.now());
                 let range = self.push(
                     &shown,
                     style.tinted(None, Some(palette.timestamp_background)),

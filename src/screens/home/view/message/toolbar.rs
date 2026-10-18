@@ -17,9 +17,37 @@ use crate::screens::home::{EmojiTarget, HomeScreen, ReplyTarget};
 use crate::ui::button::Button;
 use crate::ui::depth::{self, Finish, Level, Lit as _, radius};
 
+/// Updates a tracked message id slot (`hovered_message`, `hovered_toolbar`, or
+/// `message_menu`) on enter/leave without clearing another message that took
+/// over the slot first.
+pub(super) fn update_active_message(
+    slot: &mut Option<Id<MessageMarker>>,
+    message_id: Id<MessageMarker>,
+    active: bool,
+) {
+    if active {
+        *slot = Some(message_id);
+    } else if *slot == Some(message_id) {
+        *slot = None;
+    }
+}
+
+fn is_toolbar_shown(
+    message_id: Id<MessageMarker>,
+    hovered_message: Option<Id<MessageMarker>>,
+    hovered_toolbar: Option<Id<MessageMarker>>,
+    message_menu: Option<Id<MessageMarker>>,
+    emoji_target: Option<EmojiTarget>,
+) -> bool {
+    hovered_message == Some(message_id)
+        || hovered_toolbar == Some(message_id)
+        || message_menu == Some(message_id)
+        || emoji_target == Some(EmojiTarget::Reaction(message_id))
+}
+
 impl HomeScreen {
-    /// Sits at the top-right of the message, shown only while `group_name` —
-    /// the message row's hover group — is hovered.
+    /// Sits at the top-right of the message, mounted while [`Self::toolbar_shown`]
+    /// holds for `message`.
     ///
     /// Holding shift flattens the overflow menu into the bar, in Discord's
     /// order — copy link, reply, delete — and drops the "More" button, so the
@@ -27,7 +55,6 @@ impl HomeScreen {
     pub(super) fn render_message_toolbar(
         &self,
         message: &discord::Message,
-        group_name: &SharedString,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -37,24 +64,17 @@ impl HomeScreen {
         let can_edit = menu.can_edit;
         let expanded = self.shift_held;
         let reacting = self.reacting_to(message_id);
-        let shown = self.toolbar_shown(message_id);
 
         div()
             .id(("message-toolbar", message_id.get()))
             .absolute()
             .top(px(-16.))
             .right(px(12.))
-            .invisible()
-            .group_hover(group_name.clone(), |this| this.visible())
             // Up, it belongs to its own message: the row it overhangs mustn't
             // light up or take the pointer underneath it.
-            .when(shown, |this| this.visible().occlude())
+            .occlude()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_toolbar = Some(message_id);
-                } else if this.hovered_toolbar == Some(message_id) {
-                    this.hovered_toolbar = None;
-                }
+                update_active_message(&mut this.hovered_toolbar, message_id, *hovered);
                 cx.notify();
             }))
             .child(
@@ -134,10 +154,13 @@ impl HomeScreen {
     /// the row or the toolbar, or a picker or menu opened from the toolbar is,
     /// which the pointer leaves the message to reach.
     pub(super) fn toolbar_shown(&self, message_id: Id<MessageMarker>) -> bool {
-        self.hovered_message == Some(message_id)
-            || self.hovered_toolbar == Some(message_id)
-            || self.message_menu == Some(message_id)
-            || self.reacting_to(message_id)
+        is_toolbar_shown(
+            message_id,
+            self.hovered_message,
+            self.hovered_toolbar,
+            self.message_menu,
+            self.emoji_picker.as_ref().map(|picker| picker.target),
+        )
     }
 
     fn reacting_to(&self, message_id: Id<MessageMarker>) -> bool {
@@ -209,14 +232,171 @@ impl HomeScreen {
             .on_open_change(move |open, _, cx| {
                 if let Some(screen) = screen_for_open.upgrade() {
                     screen.update(cx, |this, cx| {
-                        if *open {
-                            this.message_menu = Some(message_id);
-                        } else if this.message_menu == Some(message_id) {
-                            this.message_menu = None;
-                        }
+                        update_active_message(&mut this.message_menu, message_id, *open);
                         cx.notify();
                     });
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EmojiTarget, Id, is_toolbar_shown, update_active_message};
+
+    #[test]
+    fn toolbar_is_shown_only_for_active_message_across_hover_menu_and_reaction() {
+        let m1 = Id::new(1);
+        let m2 = Id::new(2);
+
+        assert!(!is_toolbar_shown(m1, None, None, None, None));
+        assert!(!is_toolbar_shown(
+            m1,
+            None,
+            None,
+            None,
+            Some(EmojiTarget::Composer)
+        ));
+
+        assert!(is_toolbar_shown(m1, Some(m1), None, None, None));
+        assert!(!is_toolbar_shown(m2, Some(m1), None, None, None));
+
+        assert!(is_toolbar_shown(m1, None, Some(m1), None, None));
+        assert!(is_toolbar_shown(m1, None, None, Some(m1), None));
+        assert!(is_toolbar_shown(
+            m1,
+            None,
+            None,
+            None,
+            Some(EmojiTarget::Reaction(m1))
+        ));
+        assert!(!is_toolbar_shown(
+            m2,
+            None,
+            None,
+            None,
+            Some(EmojiTarget::Reaction(m1))
+        ));
+    }
+
+    #[test]
+    fn row_to_overhanging_toolbar_handover_preserves_active_message_in_either_order() {
+        let above = Id::new(1);
+        let current = Id::new(2);
+        let mut hovered_message = None;
+        let mut hovered_toolbar = None;
+
+        // Pointer enters `current` row: toolbar mounts for `current` only.
+        update_active_message(&mut hovered_message, current, true);
+        assert!(is_toolbar_shown(
+            current,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+        assert!(!is_toolbar_shown(
+            above,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+
+        // Case A: toolbar hover-enter fires before row hover-leave in the same
+        // mouse-move dispatch (e.g. moving into the overhanging top 16px).
+        update_active_message(&mut hovered_toolbar, current, true);
+        update_active_message(&mut hovered_message, current, false);
+        assert_eq!(hovered_message, None);
+        assert_eq!(hovered_toolbar, Some(current));
+        assert!(is_toolbar_shown(
+            current,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+        assert!(!is_toolbar_shown(
+            above,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+
+        // Case B: moving back from toolbar to row when toolbar hover-leave
+        // fires before row hover-enter in the same mouse-move dispatch.
+        update_active_message(&mut hovered_toolbar, current, false);
+        update_active_message(&mut hovered_message, current, true);
+        assert_eq!(hovered_toolbar, None);
+        assert_eq!(hovered_message, Some(current));
+        assert!(is_toolbar_shown(
+            current,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+
+        // Moving from `current` row to `above` row when `above` enter arrives
+        // before `current` leave must not clear `above`.
+        update_active_message(&mut hovered_message, above, true);
+        update_active_message(&mut hovered_message, current, false);
+        assert_eq!(hovered_message, Some(above));
+        assert!(is_toolbar_shown(
+            above,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+        assert!(!is_toolbar_shown(
+            current,
+            hovered_message,
+            hovered_toolbar,
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn open_menu_or_reaction_picker_keeps_toolbar_mounted_when_pointer_leaves() {
+        let m1 = Id::new(10);
+        let mut hovered_message = Some(m1);
+        let mut hovered_toolbar = Some(m1);
+        let mut message_menu = None;
+
+        // Opening the "More" popover and moving the pointer onto the popup
+        // menu (leaving both row and toolbar) keeps the toolbar mounted.
+        update_active_message(&mut message_menu, m1, true);
+        update_active_message(&mut hovered_message, m1, false);
+        update_active_message(&mut hovered_toolbar, m1, false);
+        assert!(is_toolbar_shown(
+            m1,
+            hovered_message,
+            hovered_toolbar,
+            message_menu,
+            None
+        ));
+
+        // Dismissing the menu once the pointer is outside unmounts the toolbar.
+        update_active_message(&mut message_menu, m1, false);
+        assert!(!is_toolbar_shown(
+            m1,
+            hovered_message,
+            hovered_toolbar,
+            message_menu,
+            None
+        ));
+
+        // Opening the reaction emoji picker from the toolbar or context menu
+        // likewise keeps the toolbar mounted until the picker closes.
+        assert!(is_toolbar_shown(
+            m1,
+            None,
+            None,
+            None,
+            Some(EmojiTarget::Reaction(m1))
+        ));
     }
 }

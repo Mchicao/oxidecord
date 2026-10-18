@@ -166,21 +166,15 @@ impl HomeScreen {
         // the floating action toolbar, like Discord. Using the toolbar counts
         // as hovering, though it hangs over the row above.
         let message_id = message.id;
-        let group_name = SharedString::from(format!("message-{}", message_id.get()));
         let mention_tint = theme.warning;
         let lit = self.toolbar_shown(message_id);
         let row = div()
             .id(("message", message_id.get()))
-            .group(group_name.clone())
             .relative()
             .w_full()
             .min_w_0()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_message = Some(message_id);
-                } else if this.hovered_message == Some(message_id) {
-                    this.hovered_message = None;
-                }
+                toolbar::update_active_message(&mut this.hovered_message, message_id, *hovered);
                 cx.notify();
             }))
             .map(|this| {
@@ -188,7 +182,6 @@ impl HomeScreen {
                     // A mention keeps its tint under the pointer, only deeper,
                     // so hovering doesn't hide which messages were for you.
                     this.bg(mention_tint.opacity(if lit { 0.16 } else { 0.1 }))
-                        .hover(|this| this.bg(mention_tint.opacity(0.16)))
                         .child(
                             div()
                                 .absolute()
@@ -200,7 +193,6 @@ impl HomeScreen {
                         )
                 } else {
                     this.when(lit, |this| this.bg(theme.accent.opacity(0.4)))
-                        .hover(|this| this.bg(theme.accent.opacity(0.4)))
                 }
             })
             // A message open for editing stays lit while the pointer is
@@ -217,9 +209,12 @@ impl HomeScreen {
             })
             .child(inner);
         // Nothing on the toolbar or the menu applies until the server knows
-        // the message.
+        // the message. Only the active row mounts its floating toolbar and
+        // overflow popover.
         let row = if message.delivery == discord::Delivery::Sent {
-            let row = row.child(self.render_message_toolbar(message, &group_name, cx));
+            let row = row.when(lit, |this| {
+                this.child(self.render_message_toolbar(message, cx))
+            });
             self.message_context_menu(row, menu::MessageMenu::new(self, message), cx)
                 .into_any_element()
         } else {
