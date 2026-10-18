@@ -26,6 +26,7 @@ use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
 use super::emoji::PickerRow;
 use super::folders::RailEntry;
+use super::navigation::NavigationHistory;
 use super::unread::Unreads;
 use super::voice::{PendingVoice, ScreenShare, StreamWatch, VoiceCall};
 use crate::voice::VoiceEngine;
@@ -227,6 +228,7 @@ pub(super) struct VideoPlayback {
 
 pub struct HomeScreen {
     pub(super) view: View,
+    pub(super) navigation_history: NavigationHistory,
     pub(super) guilds: Vec<Guild>,
     /// The signed-in user, shown in the sidebar account panel. `None` until the
     /// `GET /users/@me` fetch resolves (or if it fails).
@@ -275,6 +277,8 @@ pub struct HomeScreen {
     pub(super) pending_acks: HashMap<Id<ChannelMarker>, Id<MessageMarker>>,
     pub(super) ack_flush: Option<Task<()>>,
     pub(super) channels_loading: bool,
+    pub(super) channel_load_generation: u64,
+    pub(super) pending_channel_selection: Option<(Id<ChannelMarker>, bool)>,
     pub(super) channels_error: Option<String>,
     pub(super) messages: Vec<discord::Message>,
     pub(super) messages_loading: bool,
@@ -322,6 +326,9 @@ pub struct HomeScreen {
     /// Id of the chosen microphone, remembered between runs. `None` follows
     /// the system default.
     pub(super) voice_input_device: Option<String>,
+    /// Id of the chosen speaker, remembered between runs. `None` follows the
+    /// system default.
+    pub(super) voice_output_device: Option<String>,
     /// Everyone the gateway has reported in a voice channel, by user. This is
     /// what fills every participant list: the tiles on the call stage, and the
     /// names under each voice channel in the sidebar.
@@ -333,6 +340,8 @@ pub struct HomeScreen {
     pub(super) pending_voice: Option<PendingVoice>,
     /// Runs the call. Started with the gateway, since a call needs both.
     pub(super) voice_engine: Option<VoiceEngine>,
+    pub(super) voice_cue_policy: super::voice::cues::CuePolicy,
+    pub(super) voice_cues: crate::voice::cues::CuePlayer,
     /// The user's screen share into the call, from the moment it's announced
     /// to the gateway.
     pub(super) screen_share: Option<ScreenShare>,
@@ -353,6 +362,7 @@ pub struct HomeScreen {
     /// Sends commands up the gateway — joining and leaving voice channels is
     /// done with a gateway command, not a REST call.
     pub(super) gateway: Option<discord::GatewaySender>,
+    pub(super) gateway_status: discord::GatewayConnectionStatus,
     /// The signed-in user's id, from whichever of `READY` or `GET /users/@me`
     /// lands first. The voice connection can't identify itself without it.
     pub(super) self_user_id: Option<Id<UserMarker>>,
@@ -441,6 +451,7 @@ impl HomeScreen {
         // Bottom-aligned like a chat log; items are measured lazily, and
         // splicing older items in at the front keeps the scroll position.
         let messages_list = ListState::new(0, ListAlignment::Bottom, px(512.));
+        let remembered = prefs::load();
         let weak = cx.entity().downgrade();
         messages_list.set_scroll_handler(move |event, _window, cx| {
             let _ = weak.update(cx, |this, cx| {
@@ -463,6 +474,7 @@ impl HomeScreen {
 
         let mut this = Self {
             view: View::Guild,
+            navigation_history: NavigationHistory::default(),
             guilds: Vec::new(),
             rail_entries: Vec::new(),
             guild_folders: None,
@@ -487,6 +499,8 @@ impl HomeScreen {
             pending_acks: HashMap::new(),
             ack_flush: None,
             channels_loading: false,
+            channel_load_generation: 0,
+            pending_channel_selection: None,
             channels_error: None,
             messages: Vec::new(),
             messages_loading: false,
@@ -505,17 +519,27 @@ impl HomeScreen {
             voice_muted: false,
             voice_deafened: false,
             voice_mute_before_deafen: false,
-            voice_input_device: prefs::load().input_device,
+            voice_input_device: remembered.input_device,
+            voice_output_device: remembered.output_device,
             voice_states: HashMap::new(),
             voice_speaking: HashSet::new(),
             pending_voice: None,
             voice_engine: None,
+            voice_cue_policy: Default::default(),
+            voice_cues: crate::voice::cues::CuePlayer::start(
+                !prefs::load().voice_event_sounds_disabled,
+                || {
+                    use cpal::traits::HostTrait as _;
+                    cpal::default_host().default_output_device()
+                },
+            ),
             screen_share: None,
             stream_events: None,
             watching: None,
             retired_stream_frames: Vec::new(),
             voice_stage_size: Size::default(),
             gateway: None,
+            gateway_status: discord::GatewayConnectionStatus::Connecting,
             self_user_id: None,
             shift_held: false,
             hovered_message: None,

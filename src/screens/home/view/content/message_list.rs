@@ -104,6 +104,54 @@ impl HomeScreen {
             .py_2()
             .on_scroll_wheel(
                 cx.listener(|this, event, window, _| this.messages_scroll.absorb(event, window)),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if this.messages_scroll.is_autoscrolling() {
+                        this.messages_scroll.stop_autoscroll();
+                    } else {
+                        this.messages_scroll
+                            .start_autoscroll(event.position, window);
+                    }
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    if let Some(origin) = this.messages_scroll.autoscroll_origin() {
+                        if (event.position.y - origin.y).abs() > px(15.) {
+                            this.messages_scroll.stop_autoscroll();
+                            cx.notify();
+                        }
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.messages_scroll.is_autoscrolling() {
+                    this.messages_scroll
+                        .update_autoscroll(event.position, window);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.messages_scroll.is_autoscrolling() {
+                        this.messages_scroll.stop_autoscroll();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, _, cx| {
+                    if this.messages_scroll.is_autoscrolling() {
+                        this.messages_scroll.stop_autoscroll();
+                        cx.notify();
+                    }
+                }),
             );
         // Floats over the list rather than taking a row of its own: appearing
         // and disappearing in the layout would resize the viewport under a
@@ -118,6 +166,29 @@ impl HomeScreen {
                     .py_1()
                     .justify_center()
                     .child(Spinner::new().small().color(theme.muted_foreground)),
+            );
+        }
+
+        if let Some(origin) = self.messages_scroll.autoscroll_origin() {
+            container = container.child(
+                deferred(
+                    div().absolute().inset_0().child(
+                        anchored().position(origin - point(px(14.), px(14.))).child(
+                            div()
+                                .size(px(28.))
+                                .rounded_full()
+                                .bg(theme.popover.opacity(0.85))
+                                .border_2()
+                                .border_color(theme.border)
+                                .shadow_lg()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(div().size(px(8.)).rounded_full().bg(theme.primary)),
+                        ),
+                    ),
+                )
+                .with_priority(2),
             );
         }
 

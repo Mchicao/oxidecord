@@ -112,8 +112,32 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_guild_channel(guild_id, None, true, window, cx);
+    }
+
+    /// Opens `guild_id` and selects `target_channel` (or the guild's first
+    /// text channel when `None`). When `record_history` is `false`, the
+    /// resulting channel selection restores a history entry without pushing a
+    /// new visit.
+    pub(in crate::screens::home) fn open_guild_channel(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        target_channel: Option<Id<ChannelMarker>>,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let same_guild = self.selected_guild == Some(guild_id);
         if self.view == View::Guild && same_guild {
+            if self.channels_loading {
+                self.pending_channel_selection = target_channel.map(|id| (id, record_history));
+                return;
+            }
+            if let Some(channel_id) = target_channel
+                && self.is_selectable_guild_channel(channel_id)
+            {
+                self.apply_channel_selection(channel_id, record_history, window, cx);
+            }
             return;
         }
         self.save_collapsed_categories();
@@ -122,8 +146,11 @@ impl HomeScreen {
         // back to its channels without refetching them, reopening a channel
         // since the DM view cleared the previous selection.
         if same_guild && !self.channel_groups.is_empty() {
-            if let Some(first) = self.first_text_channel() {
-                self.select_channel(first, window, cx);
+            let chosen = target_channel
+                .filter(|&id| self.is_selectable_guild_channel(id))
+                .or_else(|| self.first_text_channel());
+            if let Some(channel_id) = chosen {
+                self.apply_channel_selection(channel_id, record_history, window, cx);
             }
             cx.notify();
             return;
@@ -131,9 +158,13 @@ impl HomeScreen {
         self.selected_guild = Some(guild_id);
         self.channel_groups.clear();
         self.selected_channel = None;
+        self.reset_conversation(None, window, cx);
         self.load_collapsed_categories();
         self.channels_error = None;
         self.channels_loading = true;
+        self.channel_load_generation = self.channel_load_generation.wrapping_add(1);
+        let generation = self.channel_load_generation;
+        self.pending_channel_selection = target_channel.map(|id| (id, record_history));
         cx.notify();
 
         // The guild list already carries the user's guild-wide permissions, so
@@ -150,7 +181,10 @@ impl HomeScreen {
             let _ = this.update_in(cx, |this, window, cx| {
                 // The user may have clicked another guild while this request
                 // was in flight; drop the stale response.
-                if this.selected_guild != Some(guild_id) {
+                if this.view != View::Guild
+                    || this.selected_guild != Some(guild_id)
+                    || this.channel_load_generation != generation
+                {
                     return;
                 }
                 match result {
@@ -161,8 +195,17 @@ impl HomeScreen {
                             }
                         }
                         this.channel_groups = build_channel_groups(channels);
-                        if let Some(channel_id) = this.first_text_channel() {
-                            this.select_channel(channel_id, window, cx);
+                        let (target_channel, record_history) = this
+                            .pending_channel_selection
+                            .take()
+                            .map_or((target_channel, record_history), |(id, record)| {
+                                (Some(id), record)
+                            });
+                        let chosen = target_channel
+                            .filter(|&id| this.is_selectable_guild_channel(id))
+                            .or_else(|| this.first_text_channel());
+                        if let Some(channel_id) = chosen {
+                            this.apply_channel_selection(channel_id, record_history, window, cx);
                         }
                     }
                     Err(err) => this.channels_error = Some(err),
@@ -223,6 +266,14 @@ impl HomeScreen {
             .iter()
             .flat_map(|group| &group.channels)
             .find(|channel| channel.id == id)
+    }
+
+    pub(in crate::screens::home) fn is_selectable_guild_channel(
+        &self,
+        id: Id<ChannelMarker>,
+    ) -> bool {
+        self.channel_info(id)
+            .is_some_and(|channel| !channel.kind.is_voice())
     }
 
     /// The first text channel in display order, used as the default selection

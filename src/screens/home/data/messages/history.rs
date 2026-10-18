@@ -8,7 +8,8 @@ use twilight_model::id::{
 };
 
 use crate::discord::{self, MessagePage};
-use crate::screens::home::{HomeScreen, View};
+use crate::screens::home::navigation::NavigationEntry;
+use crate::screens::home::{HomeScreen, NavigateBack, NavigateForward, View};
 
 impl HomeScreen {
     pub(in crate::screens::home) fn select_channel(
@@ -17,12 +18,146 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.apply_channel_selection(channel_id, true, window, cx);
+    }
+
+    /// Selects `channel_id` in the active view and loads its messages. When
+    /// `record_history` is `true`, the destination is pushed onto the
+    /// navigation stack; back/forward traversal passes `false` so stepping
+    /// through history doesn't record a fresh visit or truncate forward entries.
+    pub(in crate::screens::home) fn apply_channel_selection(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selected_channel == Some(channel_id) {
             return;
         }
         self.save_collapsed_categories();
         self.selected_channel = Some(channel_id);
+        let entry = match self.view {
+            View::DirectMessages => Some(NavigationEntry::DirectMessage { channel_id }),
+            View::Guild => self
+                .selected_guild
+                .map(|guild_id| NavigationEntry::GuildChannel {
+                    guild_id,
+                    channel_id,
+                }),
+        };
+        if let Some(entry) = entry {
+            if record_history {
+                self.navigation_history.push(entry);
+            } else {
+                self.navigation_history.replace_current(entry);
+            }
+        }
         self.load_messages(window, cx);
+    }
+
+    pub(in crate::screens::home) fn on_navigate_back(
+        &mut self,
+        _: &NavigateBack,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_back(window, cx);
+    }
+
+    pub(in crate::screens::home) fn on_navigate_forward(
+        &mut self,
+        _: &NavigateForward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_forward(window, cx);
+    }
+
+    pub(in crate::screens::home) fn navigate_back(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.step_history(false) else {
+            return;
+        };
+        self.restore_navigation_entry(entry, window, cx);
+    }
+
+    pub(in crate::screens::home) fn navigate_forward(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.step_history(true) else {
+            return;
+        };
+        self.restore_navigation_entry(entry, window, cx);
+    }
+
+    fn step_history(&mut self, forward: bool) -> Option<NavigationEntry> {
+        let guilds = &self.guilds;
+        let selected_guild = self.selected_guild;
+        let channels_loading = self.channels_loading;
+        let channel_groups = &self.channel_groups;
+        let dms_loaded = self.dms_loaded;
+        let dms = &self.dms;
+
+        let is_valid = |entry: NavigationEntry| match entry {
+            NavigationEntry::DirectMessagesHome => true,
+            NavigationEntry::DirectMessage { channel_id } => {
+                !dms_loaded || dms.iter().any(|dm| dm.id == channel_id)
+            }
+            NavigationEntry::GuildChannel {
+                guild_id,
+                channel_id,
+            } => {
+                guilds.iter().any(|guild| guild.id == guild_id)
+                    && (selected_guild != Some(guild_id)
+                        || channels_loading
+                        || channel_groups
+                            .iter()
+                            .flat_map(|group| &group.channels)
+                            .any(|channel| channel.id == channel_id && !channel.kind.is_voice()))
+            }
+        };
+
+        if forward {
+            self.navigation_history.navigate_forward(is_valid)
+        } else {
+            self.navigation_history.navigate_back(is_valid)
+        }
+    }
+
+    fn restore_navigation_entry(
+        &mut self,
+        entry: NavigationEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match entry {
+            NavigationEntry::DirectMessagesHome => {
+                self.apply_direct_messages_home(false, window, cx);
+            }
+            NavigationEntry::DirectMessage { channel_id } => {
+                if self.view != View::DirectMessages {
+                    self.save_collapsed_categories();
+                    self.view = View::DirectMessages;
+                    self.selected_channel = None;
+                    if !self.dms_loaded && !self.dms_loading {
+                        self.load_dms(cx);
+                    }
+                }
+                self.apply_channel_selection(channel_id, false, window, cx);
+            }
+            NavigationEntry::GuildChannel {
+                guild_id,
+                channel_id,
+            } => {
+                self.open_guild_channel(guild_id, Some(channel_id), false, window, cx);
+            }
+        }
     }
 
     fn load_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {

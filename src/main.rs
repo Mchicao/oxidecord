@@ -1,6 +1,5 @@
-// Release builds run as a GUI app so double-clicking the exe does not pop a
-// console window; debug builds keep the console for logging.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Native launches do not open an additional console window.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod assets;
 mod discord;
@@ -16,7 +15,8 @@ use gpui_component::{Root, input};
 
 use crate::screens::app::AppScreen;
 use crate::screens::home::{
-    COMPOSER_CONTEXT, EDIT_CONTEXT, EditLastMessage, PasteAttachment, SaveEdit, SendMessage,
+    COMPOSER_CONTEXT, EDIT_CONTEXT, EditLastMessage, NavigateBack, NavigateForward,
+    PasteAttachment, SaveEdit, SendMessage,
 };
 
 fn main() {
@@ -48,6 +48,17 @@ fn main() {
             KeyBinding::new("cmd-v", PasteAttachment, None),
         ]);
 
+        #[cfg(not(target_os = "macos"))]
+        cx.bind_keys([
+            KeyBinding::new("alt-left", NavigateBack, None),
+            KeyBinding::new("alt-right", NavigateForward, None),
+        ]);
+        #[cfg(target_os = "macos")]
+        cx.bind_keys([
+            KeyBinding::new("cmd-[", NavigateBack, None),
+            KeyBinding::new("cmd-]", NavigateForward, None),
+        ]);
+
         // These share the input's own context depth, where a later binding
         // wins, so they have to be bound after `gpui_component::init`. In both
         // the composer and the edit box, enter sends and shift-enter is handed
@@ -77,7 +88,8 @@ fn main() {
                 // controls into the conversation header instead.
                 title: Some("Oxidecord".into()),
                 appears_transparent: true,
-                ..Default::default()
+                // Ignored off macOS.
+                traffic_light_position: Some(ui::window_controls::traffic_light_position()),
             }),
             // Open maximized; the bounds are the size to restore to when unmaximized.
             window_bounds: Some(WindowBounds::Maximized(Bounds::centered(
@@ -86,6 +98,7 @@ fn main() {
                 cx,
             ))),
             window_min_size: Some(size(px(480.), px(520.))),
+            focus: false,
             ..Default::default()
         };
 

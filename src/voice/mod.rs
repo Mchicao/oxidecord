@@ -15,6 +15,7 @@
 //! directly.
 
 mod audio;
+pub mod cues;
 pub mod stream;
 
 use std::collections::{HashMap, HashSet};
@@ -36,11 +37,13 @@ use crate::platform::runtime;
 
 use audio::AudioIo;
 
-pub use audio::{InputDevice, input_devices};
+pub use audio::{AudioDevice, input_devices, output_devices};
 
 /// Everything needed to open a voice connection, gathered from the pair of
 /// gateway dispatches that follow a join.
 pub struct VoiceConnection {
+    /// Identifies this local attempt, so late events cannot confirm a newer call.
+    pub attempt: u64,
     pub channel_id: Id<ChannelMarker>,
     /// The guild the channel is in. A DM call has none, and Discord expects
     /// the channel's own id in its place.
@@ -52,13 +55,20 @@ pub struct VoiceConnection {
 }
 
 pub enum VoiceEvent {
-    Connected,
+    Connected {
+        attempt: u64,
+    },
     /// The call ended on its own: the connection dropped, or the user was
     /// disconnected from the far end.
-    Disconnected,
+    Disconnected {
+        attempt: u64,
+    },
     /// Who is transmitting right now, sent whenever the set changes.
     Speaking(HashSet<Id<UserMarker>>),
-    Failed(String),
+    Failed {
+        attempt: u64,
+        error: String,
+    },
 }
 
 /// Drives one call at a time.
@@ -76,6 +86,8 @@ enum Command {
     Deafen(bool),
     /// Switch to another microphone, by the id [`input_devices`] reported.
     InputDevice(Option<String>),
+    /// Switch to another speaker, by the id [`output_devices`] reported.
+    OutputDevice(Option<String>),
 }
 
 impl VoiceEngine {
@@ -110,6 +122,18 @@ impl VoiceEngine {
     /// already up. `None` follows the system default.
     pub fn set_input_device(&self, device: Option<String>) {
         self.send(Command::InputDevice(device));
+    }
+
+    /// Picks the speaker to play through, taking effect immediately if a call
+    /// is already up. `None` follows the system default.
+    ///
+    /// Like a microphone switch, this reopens the call's streams: playback is
+    /// interrupted locally until they restart, and every sender's decoder
+    /// starts from scratch — whatever it had buffered or already decoded is
+    /// dropped, so someone mid-sentence is picked up again from their next
+    /// packet. Mute, deafen and the connection itself are untouched.
+    pub fn set_output_device(&self, device: Option<String>) {
+        self.send(Command::OutputDevice(device));
     }
 
     fn send(&self, command: Command) {
@@ -162,10 +186,12 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
     let mut muted = false;
     let mut deafened = false;
     let mut input_device: Option<String> = None;
+    let mut output_device: Option<String> = None;
 
     while let Some(command) = commands.next().await {
         match command {
             Command::Connect(connection) => {
+                let attempt = connection.attempt;
                 // Only one call at a time: leaving the old one first stops its
                 // devices before the new one opens them.
                 call = None;
@@ -176,15 +202,19 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                     muted,
                     deafened,
                     input_device.as_deref(),
+                    output_device.as_deref(),
                 )
                 .await
                 {
                     Ok(new) => {
                         call = Some(new);
-                        let _ = events.unbounded_send(VoiceEvent::Connected);
+                        let _ = events.unbounded_send(VoiceEvent::Connected { attempt });
                     }
                     Err(error) => {
-                        let _ = events.unbounded_send(VoiceEvent::Failed(error.to_string()));
+                        let _ = events.unbounded_send(VoiceEvent::Failed {
+                            attempt,
+                            error: error.to_string(),
+                        });
                     }
                 }
             }
@@ -198,6 +228,9 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                 muted = value;
                 if let Some(call) = &mut call {
                     call.driver.mute(value);
+                    if let Ok(audio) = call.audio.lock() {
+                        audio.set_muted(value);
+                    }
                 }
             }
             Command::Deafen(value) => {
@@ -209,9 +242,33 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                 }
             }
             Command::InputDevice(device) => {
-                input_device = device;
-                if let Some(call) = &mut call {
-                    swap_microphone(call, input_device.as_deref(), deafened);
+                // The same device again — the picker re-sent what's already
+                // live — is nothing to reopen the streams for.
+                if input_device != device {
+                    input_device = device;
+                    if let Some(call) = &mut call {
+                        swap_devices(
+                            call,
+                            input_device.as_deref(),
+                            output_device.as_deref(),
+                            muted,
+                            deafened,
+                        );
+                    }
+                }
+            }
+            Command::OutputDevice(device) => {
+                if output_device != device {
+                    output_device = device;
+                    if let Some(call) = &mut call {
+                        swap_devices(
+                            call,
+                            input_device.as_deref(),
+                            output_device.as_deref(),
+                            muted,
+                            deafened,
+                        );
+                    }
                 }
             }
         }
@@ -224,13 +281,15 @@ async fn connect(
     muted: bool,
     deafened: bool,
     input_device: Option<&str>,
+    output_device: Option<&str>,
 ) -> Result<Call, ConnectionError> {
     // Decryption is off by default, since a bot usually only sends. Decoding
     // stays off: packets are decoded in `audio`, for the reasons given there.
     let config = Config::default().decode_mode(DecodeMode::Decrypt);
     let mut driver = Driver::new(config);
 
-    let audio = Arc::new(AudioIo::start(input_device));
+    let audio = Arc::new(AudioIo::start(input_device, output_device));
+    audio.set_muted(muted);
     audio.set_deafened(deafened);
     let mic_input = audio.mic_input();
     let audio: SharedAudio = Arc::new(Mutex::new(audio));
@@ -258,6 +317,8 @@ async fn connect(
     driver.add_global_event(
         Event::Core(CoreEvent::VoiceTick),
         TickHandler {
+            audio: audio.clone(),
+            local_user: connection.user_id,
             speakers: speakers.clone(),
             events: events.clone(),
         },
@@ -266,6 +327,7 @@ async fn connect(
         Event::Core(CoreEvent::DriverDisconnect),
         DriverDisconnectHandler {
             events: events.clone(),
+            attempt: connection.attempt,
         },
     );
 
@@ -278,25 +340,34 @@ async fn connect(
     Ok(Call { driver, audio, mic })
 }
 
-/// Reopens the devices on another microphone and hands the call the new one.
+/// Reopens the devices on another microphone, speaker, or both, and hands the
+/// call the new pair.
 ///
 /// The old track can't simply be repointed: it declared the old device's
 /// sample rate to the mixer, and the new device rarely runs at the same one.
-/// Reopening takes the speakers with it, which costs a few milliseconds of
-/// playback — only when the user switches, and simpler than rebuilding half of
-/// the audio thread underneath a live track.
-fn swap_microphone(call: &mut Call, input_device: Option<&str>, deafened: bool) {
+/// The speakers are reopened with it, so one command covers both directions
+/// and they can't disagree about the mixer. The restart is heard as a local
+/// interruption of playback, and the senders' decoders lose their buffered
+/// and decoded audio — only when the user switches, and simpler than
+/// rebuilding half of the audio thread underneath a live track.
+fn swap_devices(
+    call: &mut Call,
+    input_device: Option<&str>,
+    output_device: Option<&str>,
+    muted: bool,
+    deafened: bool,
+) {
     let Ok(mut current) = call.audio.lock() else {
         return;
     };
 
-    let audio = Arc::new(AudioIo::start(input_device));
+    let audio = Arc::new(AudioIo::start(input_device, output_device));
+    audio.set_muted(muted);
     audio.set_deafened(deafened);
     let mic_input = audio.mic_input();
 
     let _ = call.mic.stop();
-    // Closing the old pair after the new one is open keeps the gap down to the
-    // few milliseconds the devices take to start.
+    // Keep the old pair until its replacement has been handed to the audio thread.
     current.stop();
     *current = audio;
     drop(current);
@@ -419,6 +490,8 @@ impl EventHandler for PacketHandler {
 
 /// One 20ms tick of the call: who was heard in it, for the tiles.
 struct TickHandler {
+    audio: SharedAudio,
+    local_user: Id<UserMarker>,
     speakers: Arc<Mutex<Speakers>>,
     events: UnboundedSender<VoiceEvent>,
 }
@@ -430,14 +503,26 @@ impl EventHandler for TickHandler {
             return None;
         };
 
-        let audible: HashSet<_> = match self.speakers.lock() {
-            Ok(speakers) => tick
-                .speaking
-                .keys()
-                .filter_map(|ssrc| speakers.users.get(ssrc).copied())
+        self.update_speaking(tick.speaking.keys().copied());
+        None
+    }
+}
+
+impl TickHandler {
+    fn update_speaking(&self, streams: impl Iterator<Item = u32>) {
+        let mut audible: HashSet<_> = match self.speakers.lock() {
+            Ok(speakers) => streams
+                .filter_map(|ssrc| speakers.users.get(&ssrc).copied())
                 .collect(),
-            Err(_) => return None,
+            Err(_) => return,
         };
+
+        audible.remove(&self.local_user);
+        if let Ok(audio) = self.audio.lock()
+            && audio.is_speaking()
+        {
+            audible.insert(self.local_user);
+        }
 
         // Tiles only repaint when the set changes; at 50 ticks a second,
         // sending every one would repaint the call for no reason.
@@ -447,20 +532,21 @@ impl EventHandler for TickHandler {
             speakers.audible.clone_from(&audible);
             let _ = self.events.unbounded_send(VoiceEvent::Speaking(audible));
         }
-
-        None
     }
 }
 
 /// Reports a call that ended without the user asking.
 struct DriverDisconnectHandler {
     events: UnboundedSender<VoiceEvent>,
+    attempt: u64,
 }
 
 #[async_trait]
 impl EventHandler for DriverDisconnectHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        let _ = self.events.unbounded_send(VoiceEvent::Disconnected);
+        let _ = self.events.unbounded_send(VoiceEvent::Disconnected {
+            attempt: self.attempt,
+        });
         None
     }
 }

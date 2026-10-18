@@ -13,10 +13,14 @@ mod voice;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex};
+use gpui_component::{
+    ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex, label::Label, v_flex,
+};
 
 use super::{HomeScreen, View};
+use crate::discord::GatewayConnectionStatus;
 use crate::ui::depth;
+use crate::ui::window_controls::MAC_TITLE_BAR_HEIGHT;
 
 const MESSAGE_PADDING_X: f32 = 16.;
 
@@ -66,6 +70,12 @@ impl Render for HomeScreen {
             View::Guild => (self.selected_guild.is_some() || self.loading)
                 .then(|| self.render_channel_sidebar(cx).into_any_element()),
         };
+        let connection_notice = match self.gateway_status {
+            GatewayConnectionStatus::Connecting => Some("Connecting to Discord…"),
+            GatewayConnectionStatus::Connected => None,
+            GatewayConnectionStatus::Reconnecting => Some("Reconnecting…"),
+            GatewayConnectionStatus::Disconnected => Some("Disconnected"),
+        };
 
         h_flex()
             .size_full()
@@ -74,8 +84,23 @@ impl Render for HomeScreen {
             // The rail and sidebar sit straight on the window; the conversation
             // is a panel lifted off it (see `inset`).
             .bg(cx.theme().sidebar)
+            // An empty strip across the top for the traffic lights to sit in,
+            // clear of the rail's first icon.
+            .when(cfg!(target_os = "macos"), |this| {
+                this.pt(px(MAC_TITLE_BAR_HEIGHT))
+            })
             .on_action(cx.listener(Self::on_paste_attachment))
             .on_action(cx.listener(Self::on_edit_last_message))
+            .on_action(cx.listener(Self::on_navigate_back))
+            .on_action(cx.listener(Self::on_navigate_forward))
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, window, cx| this.navigate_back(window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, window, cx| this.navigate_forward(window, cx)),
+            )
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 if this.shift_held != event.modifiers.shift {
                     cx.notify();
@@ -89,7 +114,34 @@ impl Render for HomeScreen {
             .child(div().track_focus(&self.focus_handle))
             .child(self.render_server_rail(cx))
             .children(sidebar)
-            .child(inset(self.render_content(cx), cx))
+            .child(inset(
+                v_flex()
+                    .size_full()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .child(self.render_content(cx)),
+                    )
+                    .when_some(connection_notice, |this, label| {
+                        this.child(
+                            div()
+                                .id("gateway-connection-status")
+                                .flex_shrink_0()
+                                .px_4()
+                                .py_1()
+                                .border_t_1()
+                                .border_color(cx.theme().border)
+                                .text_xs()
+                                .text_color(cx.theme().foreground)
+                                .child(Label::new(label)),
+                        )
+                    })
+                    .into_any_element(),
+                cx,
+            ))
             .children(self.render_profile_popup(cx))
             .children(self.render_emoji_picker(cx))
     }
@@ -106,7 +158,10 @@ fn inset(content: AnyElement, cx: &App) -> impl IntoElement {
         .flex_1()
         .min_w_0()
         .h_full()
-        .py(px(INSET))
+        // On macOS the title strip above already separates the panel from the
+        // window's top edge.
+        .pt(px(if cfg!(target_os = "macos") { 0. } else { INSET }))
+        .pb(px(INSET))
         .pr(px(INSET))
         .child(
             depth::card(depth::radius::CARD, cx)

@@ -72,7 +72,18 @@ impl Surface {
     }
 }
 
-/// Eases a scroll container toward the position the wheel asked for.
+/// Deadzone in pixels around the middle-click origin where scrolling does not occur.
+pub const AUTOSCROLL_DEADZONE: f32 = 12.0;
+
+/// State for middle-click autoscroll.
+#[derive(Clone, Copy)]
+pub struct AutoscrollState {
+    pub origin: Point<Pixels>,
+    pub current: Point<Pixels>,
+}
+
+/// Eases a scroll container toward the position the wheel asked for, and handles
+/// middle-click autoscroll.
 ///
 /// Drive it with [`step`](Self::step) once per render and
 /// [`absorb`](Self::absorb) from the container's `on_scroll_wheel`.
@@ -82,6 +93,8 @@ pub struct SmoothScroll {
     current: Pixels,
     /// Where the wheel has asked it to end up.
     target: Pixels,
+    /// Active middle-click autoscroll state.
+    autoscroll: Option<AutoscrollState>,
 }
 
 impl SmoothScroll {
@@ -98,6 +111,7 @@ impl SmoothScroll {
             surface,
             current: px(0.),
             target: px(0.),
+            autoscroll: None,
         }
     }
 
@@ -109,9 +123,54 @@ impl SmoothScroll {
         }
     }
 
-    /// Advance the glide one frame, asking for another while distance remains.
+    /// Whether middle-click autoscroll is currently active.
+    pub fn is_autoscrolling(&self) -> bool {
+        self.autoscroll.is_some()
+    }
+
+    /// The origin where middle-click autoscroll was initiated.
+    pub fn autoscroll_origin(&self) -> Option<Point<Pixels>> {
+        self.autoscroll.map(|a| a.origin)
+    }
+
+    /// Start middle-click autoscroll at the specified position.
+    pub fn start_autoscroll(&mut self, origin: Point<Pixels>, window: &Window) {
+        self.autoscroll = Some(AutoscrollState {
+            origin,
+            current: origin,
+        });
+        request_step(window.current_view(), Instant::now(), window);
+    }
+
+    /// Update the current cursor position during autoscroll.
+    pub fn update_autoscroll(&mut self, current: Point<Pixels>, window: &Window) {
+        if let Some(state) = self.autoscroll.as_mut() {
+            state.current = current;
+            request_step(window.current_view(), Instant::now(), window);
+        }
+    }
+
+    /// Stop middle-click autoscroll.
+    pub fn stop_autoscroll(&mut self) {
+        self.autoscroll = None;
+    }
+
+    /// Advance the glide or autoscroll one frame, asking for another while distance remains.
     /// Call once per render, before building the element.
     pub fn step(&mut self, window: &Window) {
+        if let Some(auto) = self.autoscroll {
+            let dy = f32::from(auto.current.y - auto.origin.y);
+            let delta = autoscroll_delta(dy);
+            if !delta.is_zero() {
+                self.target =
+                    (self.surface.offset() + delta).clamp(self.surface.min_offset(), px(0.));
+                self.current = self.target;
+                self.surface.set_offset(self.current);
+            }
+            request_step(window.current_view(), Instant::now() + MIN_STEP, window);
+            return;
+        }
+
         if self.current == self.target {
             // Idle, so adopt wherever the container actually sits: something
             // else may have moved it, such as a new message pinning a
@@ -152,6 +211,7 @@ impl SmoothScroll {
     /// Requests no redraw: the handler we're overwriting already notified the
     /// view.
     pub fn absorb(&mut self, event: &ScrollWheelEvent, window: &Window) {
+        self.autoscroll = None;
         let (delta, smooth) = wheel_delta(&event.delta, window.line_height());
         if delta.is_zero() {
             return;
@@ -165,6 +225,17 @@ impl SmoothScroll {
         // never seen.
         self.surface.set_offset(self.current);
     }
+}
+
+/// Vertical delta to apply per frame during middle-click autoscroll.
+pub(crate) fn autoscroll_delta(dy: f32) -> Pixels {
+    if dy.abs() <= AUTOSCROLL_DEADZONE {
+        return px(0.);
+    }
+    let sign = dy.signum();
+    let dist = dy.abs() - AUTOSCROLL_DEADZONE;
+    let speed = dist * 0.4 + (dist * 0.04).powi(2);
+    px(speed * -sign)
 }
 
 /// This event's vertical travel in pixels, and whether it wants easing.
@@ -241,5 +312,25 @@ mod tests {
             wheel_delta(&ScrollDelta::Pixels(point(px(0.), px(-7.5))), line_height),
             (px(-7.5), false)
         );
+    }
+
+    #[test]
+    fn autoscroll_delta_respects_deadzone_and_direction() {
+        use super::autoscroll_delta;
+
+        // Inside deadzone
+        assert_eq!(autoscroll_delta(0.0), px(0.));
+        assert_eq!(autoscroll_delta(10.0), px(0.));
+        assert_eq!(autoscroll_delta(-10.0), px(0.));
+
+        // Outside deadzone: moving mouse down (dy > 0) scrolls down (negative delta)
+        let down_delta = autoscroll_delta(30.0);
+        assert!(down_delta < px(0.));
+
+        // Outside deadzone: moving mouse up (dy < 0) scrolls up (positive delta)
+        let up_delta = autoscroll_delta(-30.0);
+        assert!(up_delta > px(0.));
+
+        assert_eq!(down_delta, -up_delta);
     }
 }

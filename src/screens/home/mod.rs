@@ -11,6 +11,7 @@ mod channels;
 mod data;
 mod emoji;
 mod folders;
+mod navigation;
 mod state;
 mod unread;
 mod view;
@@ -51,6 +52,10 @@ actions!(
         SaveEdit,
         /// Open the user's most recent message in the conversation for
         /// editing. Bound to the up arrow in an empty composer, like Discord.
-        EditLastMessage
+        EditLastMessage,
+        /// Step backward through the visited channels and DM conversations.
+        NavigateBack,
+        /// Step forward through the visited channels and DM conversations.
+        NavigateForward
     ]
 );

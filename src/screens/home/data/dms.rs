@@ -7,6 +7,7 @@ use twilight_model::id::{
 };
 
 use crate::discord::{self, DirectMessage};
+use crate::screens::home::navigation::NavigationEntry;
 use crate::screens::home::{HomeScreen, View};
 
 impl HomeScreen {
@@ -18,8 +19,20 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.view == View::DirectMessages {
+        self.apply_direct_messages_home(true, window, cx);
+    }
+
+    pub(in crate::screens::home) fn apply_direct_messages_home(
+        &mut self,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == View::DirectMessages && self.selected_channel.is_none() {
             return;
+        }
+        if self.view == View::Guild {
+            self.save_collapsed_categories();
         }
         self.view = View::DirectMessages;
 
@@ -27,13 +40,17 @@ impl HomeScreen {
         // state so the previously viewed channel's messages don't linger.
         self.selected_channel = None;
         self.reset_conversation(None, window, cx);
+        if record_history {
+            self.navigation_history
+                .push(NavigationEntry::DirectMessagesHome);
+        }
 
         if !self.dms_loaded && !self.dms_loading {
             self.load_dms(cx);
         }
     }
 
-    fn load_dms(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::screens::home) fn load_dms(&mut self, cx: &mut Context<Self>) {
         self.dms_error = None;
         self.dms_loading = true;
         cx.notify();

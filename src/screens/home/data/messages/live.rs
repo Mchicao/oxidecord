@@ -18,6 +18,7 @@ impl HomeScreen {
     /// use without the other.
     pub(in crate::screens::home) fn start_gateway(&mut self, cx: &mut Context<Self>) {
         let Some(token) = discord::load_token() else {
+            self.set_gateway_status(discord::GatewayConnectionStatus::Disconnected, cx);
             return;
         };
 
@@ -30,25 +31,19 @@ impl HomeScreen {
         self.gateway = Some(gateway);
 
         cx.spawn(async move |this, cx| {
-            use futures::StreamExt as _;
-
-            let mut rx = rx;
-            while let Some(event) = rx.next().await {
-                if this
-                    .update(cx, |this, cx| this.handle_gateway_event(event, cx))
-                    .is_err()
-                {
-                    // The entity is gone; stop draining so the sender closes.
-                    break;
-                }
-            }
+            discord::receive_gateway_events(rx, |event| {
+                this.update(cx, |this, cx| this.handle_gateway_event(event, cx))
+                    .is_ok()
+            })
+            .await;
         })
         .detach();
 
         let (tx, rx) = futures::channel::mpsc::unbounded::<VoiceEvent>();
         let engine = VoiceEngine::start(tx);
-        // Hand over the remembered microphone before any call can be made.
+        // Hand over the remembered devices before any call can be made.
         engine.set_input_device(self.voice_input_device.clone());
+        engine.set_output_device(self.voice_output_device.clone());
         self.voice_engine = Some(engine);
 
         cx.spawn(async move |this, cx| {
@@ -87,6 +82,7 @@ impl HomeScreen {
 
     fn handle_gateway_event(&mut self, event: discord::GatewayEvent, cx: &mut Context<Self>) {
         match event {
+            discord::GatewayEvent::ConnectionStatus(status) => self.set_gateway_status(status, cx),
             discord::GatewayEvent::Ready {
                 user_id,
                 voice_states,
@@ -94,7 +90,7 @@ impl HomeScreen {
                 self.self_user_id = Some(user_id);
                 // A new session starts out online whatever was picked, and
                 // a resume doesn't come through here, so this covers both
-                // the first connect and every reconnect.
+                // the first connect and each new session, not resumed sessions.
                 if let (Some(status), Some(gateway)) = (self.presence_status, &self.gateway) {
                     gateway.update_presence(status);
                 }
@@ -243,6 +239,17 @@ impl HomeScreen {
                     .insert(user_id, roles);
                 cx.notify();
             }
+        }
+    }
+
+    fn set_gateway_status(
+        &mut self,
+        status: discord::GatewayConnectionStatus,
+        cx: &mut Context<Self>,
+    ) {
+        if self.gateway_status != status {
+            self.gateway_status = status;
+            cx.notify();
         }
     }
 
