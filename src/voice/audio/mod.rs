@@ -34,8 +34,10 @@
 mod activity;
 mod devices;
 mod incoming;
+mod microphone;
 mod playback;
 mod ring;
+pub(crate) mod settings;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -44,15 +46,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use songbird::constants::SAMPLE_RATE;
+use songbird::input::Input;
 use songbird::input::core::io::MediaSource;
-use songbird::input::{Input, RawAdapter};
 
 use activity::CaptureActivity;
 pub use devices::{AudioDevice, input_devices, output_devices};
 use devices::{chosen_input, chosen_output, ring_channels, run_devices};
 use incoming::Incoming;
+use microphone::microphone;
 use playback::Mixer;
 use ring::SampleRing;
+use settings::{AudioControl, GainRamp};
 
 /// Packets are decoded to stereo, which is the layout the playback rings carry.
 const CHANNELS: usize = 2;
@@ -102,9 +106,7 @@ impl Shutdown {
 }
 
 pub struct AudioIo {
-    capture: Arc<SampleRing>,
-    activity: Arc<CaptureActivity>,
-    muted: AtomicBool,
+    pub(super) capture: Arc<Capture>,
     /// What the speakers play: every sender's ring.
     mixer: Arc<Mixer>,
     /// Every sender's decoder, keyed by SSRC. Only the call's event handlers
@@ -122,6 +124,24 @@ pub struct AudioIo {
     capture_format: (u32, u32),
 }
 
+pub(super) struct Capture {
+    ring: SampleRing,
+    activity: CaptureActivity,
+    pub(super) control: Arc<AudioControl>,
+    pub(super) session: u64,
+}
+
+impl Capture {
+    fn open(&self, state: settings::CaptureState) -> bool {
+        f32::from_bits(self.control.input_gain.load(Ordering::Relaxed)) > 0.
+            && state.open(
+                self.activity
+                    .active(std::time::Instant::now(), state.epoch()),
+                self.session,
+            )
+    }
+}
+
 impl AudioIo {
     /// Opens the microphone and the speakers. Either name is a device id, as
     /// [`input_devices`] or [`output_devices`] reported it; `None`, or one
@@ -131,7 +151,12 @@ impl AudioIo {
     /// Either device may fail to open — no microphone, no output device, a
     /// driver that refuses the format — and the call carries on with the half
     /// that worked.
-    pub fn start(input_device: Option<&str>, output_device: Option<&str>) -> Self {
+    pub fn start(
+        input_device: Option<&str>,
+        output_device: Option<&str>,
+        control: Arc<AudioControl>,
+        session: u64,
+    ) -> Self {
         let host = cpal::default_host();
         // The devices are picked here, on the caller's thread, because the
         // capture format has to be known before the mixer is handed the
@@ -151,14 +176,17 @@ impl AudioIo {
                 });
 
         let this = Self {
-            capture: Arc::new(SampleRing::new(
-                capture_format.0,
-                capture_format.1 as usize,
-                CAPTURE_PRIME_MS,
-            )),
-            mixer: Arc::default(),
-            activity: Arc::default(),
-            muted: AtomicBool::new(false),
+            capture: Arc::new(Capture {
+                ring: SampleRing::new(
+                    capture_format.0,
+                    capture_format.1 as usize,
+                    CAPTURE_PRIME_MS,
+                ),
+                activity: CaptureActivity::default(),
+                control: control.clone(),
+                session,
+            }),
+            mixer: Arc::new(Mixer::new(control)),
             incoming: Mutex::default(),
             shutdown: Arc::default(),
             deafened: Arc::new(AtomicBool::new(false)),
@@ -168,10 +196,9 @@ impl AudioIo {
         let capture = this.capture.clone();
         let mixer = this.mixer.clone();
         let shutdown = this.shutdown.clone();
-        let activity = this.activity.clone();
         std::thread::Builder::new()
             .name("voice-audio".into())
-            .spawn(move || run_devices(input, output, &capture, &mixer, &shutdown, &activity))
+            .spawn(move || run_devices(input, output, &capture, &mixer, &shutdown))
             .ok();
 
         this
@@ -181,15 +208,15 @@ impl AudioIo {
     /// own format that never ends. The mixer resamples it to the call's.
     pub fn mic_input(&self) -> Input {
         let (sample_rate, channels) = self.capture_format;
-        RawAdapter::new(
+        microphone(
             MicSource {
                 capture: self.capture.clone(),
                 shutdown: self.shutdown.clone(),
+                samples: Vec::new(),
             },
             sample_rate,
             channels,
         )
-        .into()
     }
 
     /// Queues one Opus packet from the call for playback. `opus` is the
@@ -231,9 +258,15 @@ impl AudioIo {
         self.mixer.clear();
     }
 
+    #[cfg(test)]
     pub fn set_deafened(&self, deafened: bool) {
+        self.capture.control.set_deafened(deafened);
+        self.set_playback_deafened(deafened);
+    }
+
+    pub(super) fn set_playback_deafened(&self, deafened: bool) {
         self.deafened.store(deafened, Ordering::Relaxed);
-        self.activity.clear();
+        self.capture.activity.clear();
         if deafened {
             // Drop what's already queued, so undeafening doesn't replay a
             // burst of stale audio.
@@ -241,16 +274,25 @@ impl AudioIo {
         }
     }
 
+    #[cfg(test)]
     pub fn set_muted(&self, muted: bool) {
-        self.muted.store(muted, Ordering::Relaxed);
-        self.activity.clear();
+        self.capture.control.set_muted(muted);
+        self.capture.activity.clear();
     }
 
     pub fn is_speaking(&self) -> bool {
-        !self.muted.load(Ordering::Relaxed)
-            && !self.deafened.load(Ordering::Relaxed)
+        let state = self.capture.control.snapshot();
+        self.capture.open(state)
             && !self.shutdown.is_stopped()
-            && self.activity.active(std::time::Instant::now())
+            && self
+                .capture
+                .activity
+                .active(std::time::Instant::now(), state.epoch())
+            && self.capture.control.snapshot() == state
+    }
+
+    pub(super) fn can_transmit(&self) -> bool {
+        !self.shutdown.is_stopped() && self.capture.open(self.capture.control.snapshot())
     }
 
     /// Closes both devices and ends the thread holding them open.
@@ -261,7 +303,7 @@ impl AudioIo {
     /// on after the user hung up.
     pub fn stop(&self) {
         self.shutdown.stop();
-        self.capture.clear();
+        self.capture.ring.clear();
         self.forget_all();
     }
 }
@@ -277,8 +319,9 @@ impl Drop for AudioIo {
 ///
 /// Ending it would end the track, and the call would go quiet for good.
 struct MicSource {
-    capture: Arc<SampleRing>,
+    capture: Arc<Capture>,
     shutdown: Arc<Shutdown>,
+    samples: Vec<f32>,
 }
 
 impl Read for MicSource {
@@ -291,17 +334,31 @@ impl Read for MicSource {
         // sample on the wrong channel. A buffer too small to hold one is the
         // only case with nothing to hand back, and `Ok(0)` there would read as
         // the end of the track.
-        let channels = self.capture.channels;
+        let channels = self.capture.ring.channels;
         let count = (buf.len() / size_of::<f32>() / channels) * channels;
         if count == 0 {
             return Err(std::io::ErrorKind::Interrupted.into());
         }
 
-        let mut samples = vec![0f32; count];
-        self.capture.fill(&mut samples);
-        for (slot, sample) in buf.chunks_exact_mut(size_of::<f32>()).zip(samples) {
+        self.samples.resize(count, 0.);
+        let samples = &mut self.samples;
+        let state = self.capture.control.snapshot();
+        self.capture
+            .ring
+            .fill_gated(samples, state.epoch(), self.capture.open(state));
+        if self.capture.control.snapshot() != state || !self.capture.open(state) {
+            samples.fill(0.);
+        }
+        for (slot, sample) in buf.as_chunks_mut::<4>().0.iter_mut().zip(samples.iter()) {
             slot.copy_from_slice(&sample.to_le_bytes());
         }
+        if self.capture.control.snapshot() != state || !self.capture.open(state) {
+            buf[..count * size_of::<f32>()].fill(0);
+        }
+        self.capture.control.transmission(
+            self.capture.open(self.capture.control.snapshot()),
+            self.capture.session,
+        );
 
         Ok(count * size_of::<f32>())
     }

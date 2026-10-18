@@ -37,6 +37,8 @@ use crate::platform::runtime;
 
 use audio::AudioIo;
 
+pub(crate) use audio::settings::AudioControl;
+pub use audio::settings::{AudioPreferences, AudioSettings, InputMode};
 pub use audio::{AudioDevice, input_devices, output_devices};
 
 /// Everything needed to open a voice connection, gathered from the pair of
@@ -55,6 +57,7 @@ pub struct VoiceConnection {
 }
 
 pub enum VoiceEvent {
+    AudioSettingsChanged,
     Connected {
         attempt: u64,
     },
@@ -73,16 +76,17 @@ pub enum VoiceEvent {
 
 /// Drives one call at a time.
 ///
-/// Dropping the engine closes the command channel, which ends the task and
-/// tears down whatever call was live.
+/// Dropping the engine ends its task and tears down whatever call was live.
 pub struct VoiceEngine {
     commands: UnboundedSender<Command>,
+    settings: AudioSettings,
 }
 
 enum Command {
-    Connect(Box<VoiceConnection>),
+    Connect(Box<VoiceConnection>, u64),
     Disconnect,
-    Mute(bool),
+    Gate,
+    Shutdown,
     Deafen(bool),
     /// Switch to another microphone, by the id [`input_devices`] reported.
     InputDevice(Option<String>),
@@ -95,27 +99,31 @@ impl VoiceEngine {
     /// is dropped.
     pub fn start(events: UnboundedSender<VoiceEvent>) -> Self {
         let (commands, rx) = unbounded();
-        runtime::handle().spawn(run(rx, events));
-        Self { commands }
+        let settings = AudioSettings::with_events(
+            crate::platform::prefs::load().audio,
+            Some(events.clone()),
+            Some(commands.clone()),
+        );
+        runtime::handle().spawn(run(rx, events, settings.control.clone()));
+        Self { commands, settings }
     }
 
     pub fn connect(&self, connection: VoiceConnection) {
-        self.send(Command::Connect(Box::new(connection)));
+        let session = self.settings.begin_session();
+        self.send(Command::Connect(Box::new(connection), session));
     }
 
     pub fn disconnect(&self) {
+        self.settings.control.begin_session();
         self.send(Command::Disconnect);
     }
 
-    /// Stops sending the microphone. The gateway is told separately, which is
-    /// what puts the muted badge on the user's tile for everyone else.
-    pub fn set_muted(&self, muted: bool) {
-        self.send(Command::Mute(muted));
-    }
-
-    /// Stops playing what everyone else is saying.
-    pub fn set_deafened(&self, deafened: bool) {
+    pub fn set_voice_flags(&self, muted: bool, deafened: bool, restricted: bool) {
+        self.settings
+            .control
+            .set_voice_flags(muted, deafened, restricted);
         self.send(Command::Deafen(deafened));
+        self.send(Command::Gate);
     }
 
     /// Picks the microphone to send, taking effect immediately if a call is
@@ -139,6 +147,21 @@ impl VoiceEngine {
     fn send(&self, command: Command) {
         let _ = self.commands.unbounded_send(command);
     }
+
+    pub fn audio_settings(&self) -> AudioSettings {
+        self.settings.clone()
+    }
+
+    pub fn set_server_restricted(&self, restricted: bool) {
+        self.settings.control.set_server_restricted(restricted);
+    }
+}
+
+impl Drop for VoiceEngine {
+    fn drop(&mut self) {
+        self.settings.stop();
+        self.send(Command::Shutdown);
+    }
 }
 
 /// The call as the engine task holds it: songbird's driver and the audio
@@ -151,12 +174,20 @@ struct Call {
     mic: TrackHandle,
 }
 
+impl Call {
+    fn update_transmission(&mut self) {
+        let open = self.audio.lock().is_ok_and(|audio| audio.can_transmit());
+        self.driver.mute(!open);
+    }
+}
+
 impl Drop for Call {
     fn drop(&mut self) {
         // The driver's event handlers hold the devices too, and outlive it by
         // however long its shutdown takes, so the devices are closed here
         // rather than when the last handle goes.
         if let Ok(audio) = self.audio.lock() {
+            audio.capture.control.end_session(audio.capture.session);
             audio.stop();
         }
     }
@@ -179,18 +210,21 @@ struct Speakers {
     audible: HashSet<Id<UserMarker>>,
 }
 
-async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<VoiceEvent>) {
+async fn run(
+    mut commands: UnboundedReceiver<Command>,
+    events: UnboundedSender<VoiceEvent>,
+    control: Arc<audio::settings::AudioControl>,
+) {
     use futures::StreamExt as _;
 
     let mut call: Option<Call> = None;
-    let mut muted = false;
     let mut deafened = false;
     let mut input_device: Option<String> = None;
     let mut output_device: Option<String> = None;
 
     while let Some(command) = commands.next().await {
         match command {
-            Command::Connect(connection) => {
+            Command::Connect(connection, session) => {
                 let attempt = connection.attempt;
                 // Only one call at a time: leaving the old one first stops its
                 // devices before the new one opens them.
@@ -199,10 +233,10 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                 match connect(
                     *connection,
                     events.clone(),
-                    muted,
                     deafened,
-                    input_device.as_deref(),
-                    output_device.as_deref(),
+                    (input_device.as_deref(), output_device.as_deref()),
+                    control.clone(),
+                    session,
                 )
                 .await
                 {
@@ -224,21 +258,19 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                 }
                 call = None;
             }
-            Command::Mute(value) => {
-                muted = value;
+            Command::Gate => {
                 if let Some(call) = &mut call {
-                    call.driver.mute(value);
-                    if let Ok(audio) = call.audio.lock() {
-                        audio.set_muted(value);
-                    }
+                    call.update_transmission();
                 }
             }
+            Command::Shutdown => break,
             Command::Deafen(value) => {
                 deafened = value;
-                if let Some(call) = &call
-                    && let Ok(audio) = call.audio.lock()
-                {
-                    audio.set_deafened(value);
+                if let Some(call) = &mut call {
+                    if let Ok(audio) = call.audio.lock() {
+                        audio.set_playback_deafened(value);
+                    }
+                    call.update_transmission();
                 }
             }
             Command::InputDevice(device) => {
@@ -251,7 +283,6 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                             call,
                             input_device.as_deref(),
                             output_device.as_deref(),
-                            muted,
                             deafened,
                         );
                     }
@@ -265,7 +296,6 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
                             call,
                             input_device.as_deref(),
                             output_device.as_deref(),
-                            muted,
                             deafened,
                         );
                     }
@@ -278,19 +308,23 @@ async fn run(mut commands: UnboundedReceiver<Command>, events: UnboundedSender<V
 async fn connect(
     connection: VoiceConnection,
     events: UnboundedSender<VoiceEvent>,
-    muted: bool,
     deafened: bool,
-    input_device: Option<&str>,
-    output_device: Option<&str>,
+    devices: (Option<&str>, Option<&str>),
+    control: Arc<audio::settings::AudioControl>,
+    session: u64,
 ) -> Result<Call, ConnectionError> {
     // Decryption is off by default, since a bot usually only sends. Decoding
     // stays off: packets are decoded in `audio`, for the reasons given there.
     let config = Config::default().decode_mode(DecodeMode::Decrypt);
     let mut driver = Driver::new(config);
 
-    let audio = Arc::new(AudioIo::start(input_device, output_device));
-    audio.set_muted(muted);
-    audio.set_deafened(deafened);
+    let audio = Arc::new(AudioIo::start(
+        devices.0,
+        devices.1,
+        control.clone(),
+        session,
+    ));
+    audio.set_playback_deafened(deafened);
     let mic_input = audio.mic_input();
     let audio: SharedAudio = Arc::new(Mutex::new(audio));
     let speakers = Arc::new(Mutex::new(Speakers::default()));
@@ -328,12 +362,15 @@ async fn connect(
         DriverDisconnectHandler {
             events: events.clone(),
             attempt: connection.attempt,
+            control: control.clone(),
+            session,
         },
     );
 
     driver.connect(info(&connection)).await?;
+    control.activate_session(session);
 
-    driver.mute(muted);
+    driver.mute(true);
     // The microphone plays into the call like any other track, and never ends.
     let mic = driver.play_input(mic_input);
 
@@ -354,16 +391,19 @@ fn swap_devices(
     call: &mut Call,
     input_device: Option<&str>,
     output_device: Option<&str>,
-    muted: bool,
     deafened: bool,
 ) {
     let Ok(mut current) = call.audio.lock() else {
         return;
     };
 
-    let audio = Arc::new(AudioIo::start(input_device, output_device));
-    audio.set_muted(muted);
-    audio.set_deafened(deafened);
+    let audio = Arc::new(AudioIo::start(
+        input_device,
+        output_device,
+        current.capture.control.clone(),
+        current.capture.session,
+    ));
+    audio.set_playback_deafened(deafened);
     let mic_input = audio.mic_input();
 
     let _ = call.mic.stop();
@@ -537,6 +577,8 @@ impl TickHandler {
 
 /// Reports a call that ended without the user asking.
 struct DriverDisconnectHandler {
+    control: Arc<audio::settings::AudioControl>,
+    session: u64,
     events: UnboundedSender<VoiceEvent>,
     attempt: u64,
 }
@@ -544,6 +586,7 @@ struct DriverDisconnectHandler {
 #[async_trait]
 impl EventHandler for DriverDisconnectHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
+        self.control.end_session(self.session);
         let _ = self.events.unbounded_send(VoiceEvent::Disconnected {
             attempt: self.attempt,
         });

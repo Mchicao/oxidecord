@@ -42,6 +42,7 @@ pub(super) struct SampleRing {
 
 #[derive(Default)]
 struct RingState {
+    epoch: u64,
     samples: VecDeque<f32>,
     /// While set the reader emits silence: the writer hasn't built the buffer
     /// back up since the last stall.
@@ -74,14 +75,34 @@ impl SampleRing {
     }
 
     pub(super) fn push(&self, samples: impl Iterator<Item = f32>) {
+        self.push_gated(samples, 0, || true);
+    }
+
+    pub(super) fn push_gated(
+        &self,
+        samples: impl Iterator<Item = f32>,
+        epoch: u64,
+        open: impl FnOnce() -> bool,
+    ) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        if epoch < state.epoch {
+            return;
+        }
+        if epoch != state.epoch {
+            Self::reset(&mut state);
+            state.epoch = epoch;
+        }
         // A driver that hands back a NaN, or a mix that ran past full scale,
         // becomes a full-scale spike once it's converted to the device's
         // format. Neither belongs in a call, and neither is worth finding out
         // about through the speakers.
         state.samples.extend(samples.map(sanitize));
+        if !open() {
+            Self::reset(&mut state);
+            return;
+        }
 
         if state.samples.len() > self.capacity {
             // Keep the newest audio: the listener would rather skip forward
@@ -98,6 +119,10 @@ impl SampleRing {
     /// Fills `out` with what's buffered, ramping into silence when the writer
     /// hasn't kept up. `out` holds a whole number of frames.
     pub(super) fn fill(&self, out: &mut [f32]) {
+        self.fill_gated(out, 0, true);
+    }
+
+    pub(super) fn fill_gated(&self, out: &mut [f32], epoch: u64, open: bool) {
         if out.is_empty() {
             return;
         }
@@ -105,6 +130,12 @@ impl SampleRing {
             out.fill(0.);
             return;
         };
+        if epoch != state.epoch || !open {
+            Self::reset(&mut state);
+            state.epoch = state.epoch.max(epoch);
+            out.fill(0.);
+            return;
+        }
 
         if state.priming {
             if state.samples.len() < self.prime {
@@ -190,10 +221,14 @@ impl SampleRing {
 
     pub(super) fn clear(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.samples.clear();
-            state.priming = true;
-            state.fade_in = 0;
-            state.last.fill(0.);
+            Self::reset(&mut state);
         }
+    }
+
+    fn reset(state: &mut RingState) {
+        state.samples.clear();
+        state.priming = true;
+        state.fade_in = 0;
+        state.last.fill(0.);
     }
 }

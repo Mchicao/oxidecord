@@ -231,8 +231,13 @@ impl HomeScreen {
     fn apply_voice_flags(&mut self, cx: &mut Context<Self>) {
         self.voice_cues.settings().set_deafened(self.voice_deafened);
         if let Some(engine) = &self.voice_engine {
-            engine.set_muted(self.voice_muted);
-            engine.set_deafened(self.voice_deafened);
+            engine.set_voice_flags(
+                self.voice_muted,
+                self.voice_deafened,
+                self.self_user_id
+                    .and_then(|id| self.voice_states.get(&id))
+                    .is_some_and(discord::VoiceUserState::server_restricted),
+            );
         }
         if let Some(call) = &self.voice
             && let Some(gateway) = &self.gateway
@@ -275,6 +280,13 @@ impl HomeScreen {
                     self.voice_muted = state.self_mute;
                     self.voice_deafened = state.self_deaf;
                     self.voice_cues.settings().set_deafened(state.self_deaf);
+                    if let Some(engine) = &self.voice_engine {
+                        engine.set_voice_flags(
+                            state.self_mute,
+                            state.self_deaf,
+                            state.server_restricted(),
+                        );
+                    }
                     // A moderator can move the user between channels. Follow
                     // them: the voice server for the new channel is on its way.
                     if self
@@ -328,6 +340,13 @@ impl HomeScreen {
             let known = previous.remove(&state.user_id);
             let state = with_known_profile(state, known.as_ref());
             record_voice_state(&mut self.voice_states, state, false, None);
+        }
+        if let Some(engine) = &self.voice_engine {
+            engine.set_server_restricted(
+                self.self_user_id
+                    .and_then(|id| self.voice_states.get(&id))
+                    .is_some_and(discord::VoiceUserState::server_restricted),
+            );
         }
         cx.notify();
     }
@@ -460,8 +479,13 @@ impl HomeScreen {
         let Some(engine) = &self.voice_engine else {
             return;
         };
-        engine.set_muted(self.voice_muted);
-        engine.set_deafened(self.voice_deafened);
+        engine.set_voice_flags(
+            self.voice_muted,
+            self.voice_deafened,
+            self.self_user_id
+                .and_then(|id| self.voice_states.get(&id))
+                .is_some_and(discord::VoiceUserState::server_restricted),
+        );
         engine.connect(connection);
         cx.notify();
     }
@@ -472,6 +496,7 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         match event {
+            VoiceEvent::AudioSettingsChanged => cx.refresh_windows(),
             VoiceEvent::Connected { attempt } => {
                 if !self.voice_cue_policy.accepts(attempt) {
                     return;
@@ -692,6 +717,7 @@ mod tests {
             self_deaf: false,
             mute: false,
             deaf: false,
+            suppress: false,
             self_stream: false,
             name: name.map(str::to_owned),
             avatar_url: None,

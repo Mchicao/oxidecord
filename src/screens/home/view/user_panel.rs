@@ -163,17 +163,33 @@ impl HomeScreen {
                     .on_click({
                         let home = cx.weak_entity();
                         move |_, window, cx| {
-                            let Ok(cue_settings) =
-                                home.update(cx, |home, _| home.voice_cues.settings())
-                            else {
+                            let Ok((cue_settings, audio_settings)) = home.update(cx, |home, _| {
+                                (
+                                    home.voice_cues.settings(),
+                                    home.voice_engine
+                                        .as_ref()
+                                        .map(|engine| engine.audio_settings())
+                                        .unwrap_or_else(|| {
+                                            crate::voice::AudioSettings::offline(
+                                                crate::platform::prefs::load().audio,
+                                            )
+                                        }),
+                                )
+                            }) else {
                                 return;
                             };
                             let home = home.clone();
-                            settings::open(window, cx, cue_settings, move |_, cx| {
-                                // Gone already if the session ended while the
-                                // popup was open.
-                                let _ = home.update(cx, |home, cx| home.log_out(cx));
-                            })
+                            settings::open(
+                                window,
+                                cx,
+                                cue_settings,
+                                audio_settings,
+                                move |_, cx| {
+                                    // Gone already if the session ended while the
+                                    // popup was open.
+                                    let _ = home.update(cx, |home, cx| home.log_out(cx));
+                                },
+                            )
                         }
                     }),
             )

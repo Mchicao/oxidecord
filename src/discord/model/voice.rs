@@ -30,12 +30,19 @@ pub struct VoiceUserState {
     /// Muted or deafened by a moderator, which the user can't undo themselves.
     pub mute: bool,
     pub deaf: bool,
+    pub suppress: bool,
     /// Going live: sharing their screen into the call.
     pub self_stream: bool,
     /// Display name and avatar, carried by dispatches that include the member.
     /// Absent ones fall back to whatever the app already knows about the user.
     pub name: Option<String>,
     pub avatar_url: Option<String>,
+}
+
+impl VoiceUserState {
+    pub fn server_restricted(&self) -> bool {
+        self.mute || self.deaf || self.suppress
+    }
 }
 
 /// Where a call's voice websocket lives, from `VOICE_SERVER_UPDATE`.
@@ -67,6 +74,8 @@ pub(in crate::discord) struct RawVoiceState {
     mute: bool,
     #[serde(default)]
     deaf: bool,
+    #[serde(default)]
+    suppress: bool,
     #[serde(default)]
     self_stream: bool,
     #[serde(default)]
@@ -132,6 +141,7 @@ fn convert(
         self_deaf: raw.self_deaf,
         mute: raw.mute,
         deaf: raw.deaf,
+        suppress: raw.suppress,
         self_stream: raw.self_stream,
         name,
         avatar_url,
@@ -144,6 +154,53 @@ pub(in crate::discord) fn convert_voice_server(raw: RawVoiceServer) -> VoiceServ
         token: raw.token,
         guild_id: raw.guild_id,
         channel_id: raw.channel_id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw(flags: serde_json::Value) -> RawVoiceState {
+        let mut value = serde_json::json!({"user_id":"1", "channel_id":"2"});
+        value
+            .as_object_mut()
+            .expect("voice state")
+            .extend(flags.as_object().expect("flags").clone());
+        serde_json::from_value(value).expect("raw voice state")
+    }
+
+    #[test]
+    fn omitted_flags_default_false_and_live_suppression_preserves_mute_semantics() {
+        let initial = convert_voice_state(raw(serde_json::json!({})));
+        assert!(!initial.suppress && !initial.mute && !initial.deaf);
+        assert!(!initial.server_restricted());
+        let suppressed = convert_voice_state(raw(serde_json::json!({"suppress":true})));
+        assert!(suppressed.suppress && suppressed.server_restricted());
+        assert!(!suppressed.mute && !suppressed.deaf);
+        let lifted = convert_voice_state(raw(serde_json::json!({"suppress":false})));
+        assert!(!lifted.server_restricted());
+        for flag in ["mute", "deaf"] {
+            let restricted = convert_voice_state(raw(serde_json::json!({(flag):true})));
+            assert!(restricted.server_restricted());
+            assert!(!restricted.suppress);
+        }
+    }
+
+    #[test]
+    fn initial_guild_voice_states_keep_suppression_separate_from_server_mute() {
+        let states = convert_guild_voice_states(
+            Id::new(10),
+            vec![
+                raw(serde_json::json!({"suppress":true})),
+                raw(serde_json::json!({})),
+            ],
+            std::iter::empty(),
+        );
+        assert_eq!(states[0].guild_id, Some(Id::new(10)));
+        assert!(states[0].suppress && states[0].server_restricted());
+        assert!(!states[0].mute && !states[0].deaf);
+        assert!(!states[1].server_restricted());
     }
 }
 

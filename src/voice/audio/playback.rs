@@ -7,6 +7,7 @@ use songbird::constants::SAMPLE_RATE;
 
 use super::CHANNELS;
 use super::ring::SampleRing;
+use super::settings::{AudioControl, GainRamp};
 use crate::platform::audio::sanitize;
 
 /// Eases a mix that has run past full scale back inside it.
@@ -39,14 +40,20 @@ fn limit(sample: f32) -> f32 {
 /// Each sender's packets keep their own clock and their own jitter, so each
 /// gets a ring to prime, starve and ramp on its own: one person's connection
 /// stalling doesn't cut out everyone else.
-#[derive(Default)]
 pub(super) struct Mixer {
     /// Keyed by SSRC. A list rather than a map because the audio callback
     /// walks all of it every time and looks nothing up.
     rings: Mutex<Vec<(u32, Arc<SampleRing>)>>,
+    control: Arc<AudioControl>,
 }
 
 impl Mixer {
+    pub(super) fn new(control: Arc<AudioControl>) -> Self {
+        Self {
+            rings: Mutex::default(),
+            control,
+        }
+    }
     /// Fills `out` with every sender summed. `stream` is scratch space for
     /// one sender's share, held by the caller so the audio thread doesn't
     /// allocate.
@@ -97,6 +104,8 @@ impl Mixer {
 /// the callback rate is heard as a tone over the speech rather than as the
 /// glitches it is.
 pub(super) struct Playback {
+    gain: GainRamp,
+    gain_step: f32,
     mixer: Arc<Mixer>,
     /// The source frames the next output frame falls between.
     previous: [f32; CHANNELS],
@@ -116,6 +125,13 @@ pub(super) struct Playback {
 impl Playback {
     pub(super) fn new(mixer: Arc<Mixer>, sample_rate: u32, channels: usize) -> Self {
         Self {
+            gain: GainRamp::new(f32::from_bits(
+                mixer
+                    .control
+                    .output_gain
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )),
+            gain_step: 1. / (sample_rate.max(1) as f32 * channels.max(1) as f32 * 0.005),
             mixer,
             previous: [0.; CHANNELS],
             next: [0.; CHANNELS],
@@ -156,6 +172,12 @@ impl Playback {
         self.mixer.fill(&mut self.scratch, &mut self.stream);
 
         let mut pulled = 0;
+        let gain = f32::from_bits(
+            self.mixer
+                .control
+                .output_gain
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         for frame in 0..frames {
             let blend = self.phase as f32;
             for (channel, slot) in out[frame * self.channels..][..self.channels]
@@ -171,7 +193,11 @@ impl Playback {
                         (self.next[0] + self.next[1]) / 2.,
                     ),
                 };
-                *slot = T::from_sample(sanitize(previous + (next - previous) * blend));
+                *slot = T::from_sample(self.gain.apply(
+                    sanitize(previous + (next - previous) * blend),
+                    gain,
+                    self.gain_step,
+                ));
             }
 
             self.phase += self.step;
@@ -188,5 +214,61 @@ impl Playback {
 
         // Whatever the device asked for beyond a whole number of frames.
         out[frames * self.channels..].fill(T::EQUILIBRIUM);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::settings::AudioPreferences;
+    use super::*;
+
+    #[test]
+    fn global_output_gain_changes_rendered_pcm_live_without_changing_senders() {
+        let control = Arc::new(AudioControl::new(&AudioPreferences::default()));
+        let mixer = Arc::new(Mixer::new(control.clone()));
+        let ring = Arc::new(SampleRing::new(48_000, 2, 0));
+        mixer.add(1, ring.clone());
+        let mut playback = Playback::new(mixer, 48_000, 2);
+        for gain in [1., 0., 0.5, 2.] {
+            control.configure(
+                &AudioPreferences {
+                    output_gain: gain,
+                    ..AudioPreferences::default()
+                },
+                false,
+            );
+            ring.push(std::iter::repeat_n(0.25, 4096));
+            let mut out = [0f32; 2048];
+            playback.render(&mut out);
+            assert!(
+                (out[2047] - 0.25 * gain).abs() < 0.00001,
+                "gain {gain}: got {}",
+                out[2047]
+            );
+            assert!(
+                out.iter()
+                    .all(|sample| sample.is_finite() && sample.abs() <= 1.)
+            );
+        }
+        control.configure(
+            &AudioPreferences {
+                output_gain: 2.,
+                ..AudioPreferences::default()
+            },
+            false,
+        );
+        ring.clear();
+        ring.push(std::iter::repeat_n(0.8, 4096));
+        let mut out = [0f32; 2048];
+        playback.render(&mut out);
+        assert_eq!(out[2047], 1.);
+        ring.clear();
+        ring.push([f32::NAN, f32::INFINITY].into_iter().cycle().take(4096));
+        playback.render(&mut out);
+        assert!(
+            out.iter()
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.)
+        );
+        assert_eq!(out[2047], 0.);
     }
 }

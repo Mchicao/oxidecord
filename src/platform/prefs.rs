@@ -14,6 +14,8 @@ const FILE_NAME: &str = "prefs.json";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Prefs {
+    #[serde(default)]
+    pub audio: crate::voice::AudioPreferences,
     /// Name of the selected theme, as it appears in the theme's JSON. `None`
     /// until the user picks one, which leaves the system appearance in charge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +102,44 @@ fn file_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_preferences_round_trip_and_legacy_defaults_preserve_audio() {
+        use crate::voice::{AudioPreferences, InputMode};
+        let preferences = Prefs {
+            audio: AudioPreferences {
+                input_gain: 1.5,
+                output_gain: 0.25,
+                threshold_db: -55.,
+                mode: InputMode::PushToTalk,
+                ptt_key: 0xa3,
+            },
+            theme: Some("dark".into()),
+            ..Prefs::default()
+        };
+        let restored: Prefs =
+            serde_json::from_str(&serde_json::to_string(&preferences).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(restored.audio, preferences.audio);
+        assert_eq!(restored.theme, preferences.theme);
+        let legacy: Prefs = serde_json::from_str(r#"{"theme":"dark"}"#).expect("legacy");
+        assert_eq!(legacy.audio, AudioPreferences::default());
+        let partial: Prefs =
+            serde_json::from_str(r#"{"audio":{"mode":"voice_activity"}}"#).expect("partial");
+        assert_eq!(partial.audio.mode, InputMode::VoiceActivity);
+        assert_eq!(partial.audio.input_gain, 1.);
+        assert_eq!(partial.audio.output_gain, 1.);
+        for invalid in [
+            r#"{"audio":{"input_gain":-1}}"#,
+            r#"{"audio":{"output_gain":2.1}}"#,
+            r#"{"audio":{"threshold_db":1}}"#,
+            r#"{"audio":{"threshold_db":-81}}"#,
+            r#"{"audio":{"ptt_key":0}}"#,
+            r#"{"audio":{"input_gain":1e100}}"#,
+        ] {
+            assert!(serde_json::from_str::<Prefs>(invalid).is_err());
+        }
+    }
 
     /// What a preference stores survives the trip to disk's format: both
     /// device ids come back, and unset ones stay unset so an older file

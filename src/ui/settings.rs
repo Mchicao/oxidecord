@@ -2,7 +2,7 @@
 //! beside the active page's groups — hosted in a dialog, opened from the
 //! account panel.
 //!
-//! Themes picks a preset, voice controls membership cues, and updates drives
+//! Themes picks a preset, voice controls call audio and membership cues, and updates drives
 //! the self-updater in [`crate::platform::updater`]. Typing [`DEBUG_CODE`] into
 //! the search adds [`gallery`] for the rest of the session. A logout
 //! button sits under the page list.
@@ -24,6 +24,7 @@ use crate::platform::updater::{self, Status};
 use crate::ui::button::Button;
 use crate::ui::{depth, gallery, theme};
 use crate::voice::cues::CueSettings;
+use crate::voice::{AudioSettings, InputMode};
 
 /// Size the popup aims for. Both are capped to the window with [`WINDOW_MARGIN`]
 /// to spare, since the dialog is positioned from a fixed size and would
@@ -56,6 +57,7 @@ pub fn open(
     window: &mut Window,
     cx: &mut App,
     cue_settings: CueSettings,
+    audio_settings: AudioSettings,
     on_log_out: impl Fn(&mut Window, &mut App) + 'static,
 ) {
     arm_debug_code(cx);
@@ -99,7 +101,7 @@ pub fn open(
                             .sidebar_width(px(SIDEBAR_WIDTH))
                             .sidebar_style(&StyleRefinement::default().rounded_l(inner_radius))
                             .page(themes_page())
-                            .page(voice_page(cue_settings.clone()))
+                            .page(voice_page(cue_settings.clone(), audio_settings.clone()))
                             .page(updates_page())
                             .when(debug, |this| this.page(gallery::page())),
                     )
@@ -207,10 +209,47 @@ fn themes_page() -> SettingPage {
         )
 }
 
-fn voice_page(settings: CueSettings) -> SettingPage {
+fn voice_page(settings: CueSettings, audio: AudioSettings) -> SettingPage {
     let read = settings.clone();
+    let mode_read = audio.clone();
+    let mode_write = audio.clone();
+    let key_read = audio.clone();
+    let key_write = audio.clone();
+    let status = audio.clone();
     SettingPage::new("Voice")
         .resettable(false)
+        .group(
+            SettingGroup::new().title("Call audio")
+                .item(SettingItem::new("Output volume (%)", audio_number(audio.clone(), AudioNumber::Output))
+                    .description("Volume of everyone you hear in the call. 100% is unchanged; up to 200% with peak clipping protection."))
+                .item(SettingItem::new("Microphone gain (%)", audio_number(audio.clone(), AudioNumber::Input))
+                    .description("Local gain applied to the microphone audio sent to others. 0% sends silence; 100% is unchanged."))
+                .item(SettingItem::new("Input mode", SettingField::dropdown(
+                    vec![("always_on".into(), "Always on".into()), ("voice_activity".into(), "Voice activity".into()), ("push_to_talk".into(), "Push to talk (background)".into())],
+                    move |_| match mode_read.preferences().mode { InputMode::AlwaysOn => "always_on", InputMode::VoiceActivity => "voice_activity", InputMode::PushToTalk => "push_to_talk" }.into(),
+                    move |mode, cx| {
+                        let mut value = mode_write.preferences();
+                        value.mode = match mode.as_ref() { "voice_activity" => InputMode::VoiceActivity, "push_to_talk" => InputMode::PushToTalk, _ => InputMode::AlwaysOn };
+                        save_audio(&mode_write, value, cx);
+                    },
+                )).description("Mute, deafen and server restrictions always take priority. No noise cancellation or automatic gain control is applied."))
+                .item(SettingItem::new("Voice activity threshold (dBFS)", audio_number(audio, AudioNumber::Threshold))
+                    .description("Manual sensitivity for Voice activity only. Lower values open on quieter sounds; -80 to 0 dBFS with a 200 ms hold. Energy detection also reacts to noise."))
+                .item(SettingItem::new("Push-to-talk key", SettingField::dropdown(
+                    crate::platform::ptt::keys().into_iter().map(|(key, name)| (key.to_string().into(), name.into())).collect(),
+                    move |_| key_read.preferences().ptt_key.to_string().into(),
+                    move |key, cx| {
+                        if let Ok(key) = key.parse() {
+                            let mut value = key_write.preferences();
+                            value.ptt_key = key;
+                            save_audio(&key_write, value, cx);
+                        }
+                    },
+                )).description("Single keyboard key, including left/right modifiers and F1–F24. Changes release PTT; release and press the new key to resume."))
+                .item(SettingItem::render(move |_: &RenderOptions, _, cx| {
+                    div().text_sm().text_color(cx.theme().muted_foreground).child(status.ptt_status())
+                })),
+        )
         .group(
             SettingGroup::new().title("Sounds").item(
                 SettingItem::new(
@@ -226,6 +265,56 @@ fn voice_page(settings: CueSettings) -> SettingPage {
                 .description("Play a short sound when you or others join or leave your call. Always silent while deafened."),
             ),
         )
+}
+
+#[derive(Clone, Copy)]
+enum AudioNumber {
+    Input,
+    Output,
+    Threshold,
+}
+
+fn audio_number(settings: AudioSettings, field: AudioNumber) -> SettingField<SharedString> {
+    let read = settings.clone();
+    let (min, max) = if matches!(field, AudioNumber::Threshold) {
+        (-80., 0.)
+    } else {
+        (0., 200.)
+    };
+    SettingField::input(
+        move |_| {
+            let value = read.preferences();
+            (match field {
+                AudioNumber::Input => value.input_gain * 100.,
+                AudioNumber::Output => value.output_gain * 100.,
+                AudioNumber::Threshold => value.threshold_db,
+            })
+            .to_string()
+            .into()
+        },
+        move |number, cx| {
+            let Ok(number) = number.parse::<f64>() else {
+                return;
+            };
+            if !number.is_finite() || !(min..=max).contains(&number) {
+                return;
+            }
+            let mut value = settings.preferences();
+            match field {
+                AudioNumber::Input => value.input_gain = (number / 100.) as f32,
+                AudioNumber::Output => value.output_gain = (number / 100.) as f32,
+                AudioNumber::Threshold => value.threshold_db = number as f32,
+            }
+            save_audio(&settings, value, cx);
+        },
+    )
+}
+
+fn save_audio(settings: &AudioSettings, value: crate::voice::AudioPreferences, cx: &mut App) {
+    if settings.set(value.clone()).is_ok() {
+        prefs::update(|prefs| prefs.audio = value);
+        cx.refresh_windows();
+    }
 }
 
 /// Every preset laid out as a wrapping grid of preview cards.

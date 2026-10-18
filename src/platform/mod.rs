@@ -8,6 +8,7 @@ pub mod capture;
 pub mod h264;
 pub mod http;
 pub mod prefs;
+pub(crate) mod ptt;
 pub mod runtime;
 pub mod updater;
 pub mod video;
