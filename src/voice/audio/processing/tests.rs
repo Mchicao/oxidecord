@@ -252,7 +252,7 @@ fn taps_average_channels_preserve_partial_frames_and_reference_actual_post_volum
     let mixer = Arc::new(Mixer::new(capture.control.clone()));
     let ring = Arc::new(SampleRing::new(RATE, 2, 0));
     ring.push(std::iter::repeat_n(0.4, FRAME * 8));
-    mixer.add(1, ring);
+    mixer.add_with_user(1, None, ring);
     let mut playback = Playback::new(mixer, RATE, 2);
     let mut rendered = [0f32; FRAME * 2];
     playback.render(&mut rendered);

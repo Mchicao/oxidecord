@@ -10,8 +10,6 @@ use crate::screens::home::voice::{VoiceCall, VoiceStatus};
 use crate::ui::button::Button;
 use crate::ui::depth::{self, radius};
 
-use super::CAMERA_UNAVAILABLE;
-
 impl HomeScreen {
     /// The sidebar footer: the call panel when there's a call, the account
     /// panel always.
@@ -97,12 +95,19 @@ impl HomeScreen {
                             .gap_1()
                             .child(
                                 Button::new("voice-panel-camera")
-                                    .icon(Icon::default().path("icons/video-off.svg"))
+                                    .icon(Icon::default().path(if self.camera.active {
+                                        "icons/video.svg"
+                                    } else {
+                                        "icons/video-off.svg"
+                                    }))
                                     .ghost()
                                     .small()
                                     .flex_1()
-                                    .disabled(true)
-                                    .tooltip(CAMERA_UNAVAILABLE),
+                                    .disabled(!self.can_use_camera())
+                                    .tooltip("Toggle Camera")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_camera(window, cx)
+                                    })),
                             )
                             .child(
                                 Button::new("voice-panel-share")

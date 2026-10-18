@@ -8,7 +8,7 @@ use gpui::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
-use crate::screens::home::{HomeScreen, View};
+use crate::screens::home::HomeScreen;
 
 /// Discord's epoch, 2015-01-01, in Unix milliseconds.
 const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
@@ -39,11 +39,7 @@ impl HomeScreen {
         };
         // Guard the send path too: the composer is replaced by a notice on
         // channels the user can't post in, but Enter could still reach here.
-        if self.view != View::DirectMessages
-            && !self
-                .selected_channel_info()
-                .is_some_and(|channel| channel.can_send)
-        {
+        if !self.can_send_to_selected() {
             return;
         }
 

@@ -179,11 +179,22 @@ impl HomeScreen {
                                 return;
                             };
                             let home = home.clone();
+                            let notification_home = home.clone();
+                            let notifications =
+                                super::super::inbox::view::notifications_settings_page(
+                                    crate::platform::prefs::load().notifications,
+                                    move |prefs, _, cx| {
+                                        let _ = notification_home.update(cx, |home, cx| {
+                                            home.set_notification_preferences(prefs, cx)
+                                        });
+                                    },
+                                );
                             settings::open(
                                 window,
                                 cx,
                                 cue_settings,
                                 audio_settings,
+                                notifications,
                                 move |_, cx| {
                                     // Gone already if the session ended while the
                                     // popup was open.
@@ -220,7 +231,7 @@ fn status_description(status: PresenceStatus) -> Option<&'static str> {
 /// invisible or offline. `backdrop` is what it sits on: it's ringed in it, so
 /// it cuts cleanly into an avatar, and the cut-outs are painted in it.
 /// `hover` names the group whose hover changes that backdrop, and to what.
-pub(super) fn status_indicator(
+pub(in crate::screens::home) fn status_indicator(
     status: PresenceStatus,
     size: Pixels,
     backdrop: Hsla,

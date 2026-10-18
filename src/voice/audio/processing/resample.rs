@@ -29,7 +29,7 @@ impl SincResamplerCallback for Source {
     }
 }
 
-pub(super) struct Resampler {
+pub(in crate::voice::audio) struct Resampler {
     sinc: Option<SincResampler>,
     source: Source,
     input_rate: u32,
@@ -40,7 +40,10 @@ pub(super) struct Resampler {
 }
 
 impl Resampler {
-    pub(super) fn new(input_rate: u32, output_rate: u32) -> Result<Self, &'static str> {
+    pub(in crate::voice::audio) fn new(
+        input_rate: u32,
+        output_rate: u32,
+    ) -> Result<Self, &'static str> {
         if !(8_000..=MAX_RATE).contains(&input_rate) || !(8_000..=MAX_RATE).contains(&output_rate) {
             return Err("Sonora requires device rates between 8 kHz and 384 kHz.");
         }
@@ -61,7 +64,11 @@ impl Resampler {
         })
     }
 
-    pub(super) fn push(&mut self, samples: &[f32], at: Instant) -> Result<(), &'static str> {
+    pub(in crate::voice::audio) fn push(
+        &mut self,
+        samples: &[f32],
+        at: Instant,
+    ) -> Result<(), &'static str> {
         if self.source.samples.len() + samples.len() > CAPACITY {
             return Err("Audio conversion backlog exceeded its fixed capacity.");
         }
@@ -73,7 +80,10 @@ impl Resampler {
         Ok(())
     }
 
-    pub(super) fn pull(&mut self, output: &mut [f32]) -> Result<Option<Instant>, &'static str> {
+    pub(in crate::voice::audio) fn pull(
+        &mut self,
+        output: &mut [f32],
+    ) -> Result<Option<Instant>, &'static str> {
         if output.is_empty() {
             return Ok(None);
         }
@@ -126,7 +136,7 @@ impl Resampler {
         Ok(Some(at))
     }
 
-    pub(super) fn reset(&mut self) {
+    pub(in crate::voice::audio) fn reset(&mut self) {
         self.source.samples.clear();
         self.source.underflow = false;
         self.source.pulled = 0;

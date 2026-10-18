@@ -151,6 +151,13 @@ impl HomeScreen {
                     }),
             )
             .child(self.render_call_controls(cx))
+            .children(self.camera.error.as_ref().map(|error| {
+                div()
+                    .px_4()
+                    .text_sm()
+                    .text_color(cx.theme().danger)
+                    .child(error.clone())
+            }))
     }
 
     /// A watched stream, filling the stage: the picture once it's arrived,

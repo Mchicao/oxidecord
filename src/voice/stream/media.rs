@@ -16,6 +16,7 @@ use aes_gcm::aead::{AeadInPlace as _, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
 use tokio::net::UdpSocket;
 
+use crate::platform::capture::clock::{MediaClock, rtp_timestamp};
 use crate::platform::capture::nal_units;
 
 pub(super) const AES_MODE: &str = "aead_aes256_gcm_rtpsize";
@@ -143,11 +144,55 @@ pub(super) struct Media {
     last_sent: Option<SystemTime>,
     packets: u32,
     octets: u32,
+    audio_sequence: u16,
+    audio_timestamp_base: u32,
+    audio_timestamp: u32,
+    audio_captured: Option<Duration>,
+    audio_packets: u32,
+    audio_octets: u32,
+    video_captured: Option<Duration>,
+    wall_origin: SystemTime,
 
     history: Vec<Option<Sent>>,
 }
 
 impl Media {
+    pub(super) fn sender_reports(&self, packet: &[u8]) -> Vec<super::sync::SenderReport> {
+        let Some(cipher) = &self.cipher else {
+            return Vec::new();
+        };
+        if packet.len() < 28 || !(200..=206).contains(&packet[1]) {
+            return Vec::new();
+        }
+        let (aad, rest) = packet.split_at(8);
+        let (body, counter) = rest.split_at(rest.len() - 4);
+        let mut body = body.to_vec();
+        if cipher
+            .open(counter.try_into().unwrap_or_default(), aad, &mut body)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        let compound = [aad, &body].concat();
+        let mut reports = Vec::new();
+        let mut offset = 0;
+        while let Some(header) = compound.get(offset..offset + 8) {
+            let length = (usize::from(u16::from_be_bytes([header[2], header[3]])) + 1) * 4;
+            if length < 8 || offset + length > compound.len() {
+                break;
+            }
+            if header[1] == 200 && length >= 28 {
+                let report = &compound[offset..offset + length];
+                reports.push(super::sync::SenderReport {
+                    ssrc: u32::from_be_bytes(report[4..8].try_into().unwrap()),
+                    ntp: u64::from_be_bytes(report[8..16].try_into().unwrap()),
+                    timestamp: u32::from_be_bytes(report[16..20].try_into().unwrap()),
+                });
+            }
+            offset += length;
+        }
+        reports
+    }
     /// Opens the socket and learns the address the voice server sees it at,
     /// which is what `SELECT_PROTOCOL` tells it to send to.
     pub(super) async fn connect(
@@ -178,6 +223,14 @@ impl Media {
                 last_sent: None,
                 packets: 0,
                 octets: 0,
+                audio_sequence: rand_u32() as u16,
+                audio_timestamp_base: rand_u32(),
+                audio_timestamp: 0,
+                audio_captured: None,
+                audio_packets: 0,
+                audio_octets: 0,
+                video_captured: None,
+                wall_origin: SystemTime::now(),
                 history: (0..HISTORY).map(|_| None).collect(),
             },
             external,
@@ -189,20 +242,65 @@ impl Media {
         Ok(())
     }
 
+    pub(super) fn set_clock(&mut self, clock: MediaClock) {
+        self.wall_origin = clock.wall_origin();
+    }
+
+    pub(super) async fn send_audio(
+        &mut self,
+        opus: &[u8],
+        timestamp: Duration,
+    ) -> Result<(), String> {
+        if opus.is_empty() || opus.len() > 1400 {
+            return Err("Invalid protected Opus packet size".into());
+        }
+        let sequence = self.audio_sequence;
+        self.audio_sequence = sequence.wrapping_add(1);
+        let timestamp_rtp = rtp_timestamp(self.audio_timestamp_base, timestamp, 48_000);
+        let packet = self
+            .rtp(
+                OPUS_PAYLOAD,
+                self.ssrcs.audio,
+                sequence,
+                timestamp_rtp,
+                false,
+                opus,
+            )
+            .ok_or("Couldn't encrypt the audio packet; reconnect the call")?;
+        self.socket
+            .send(&packet)
+            .await
+            .map_err(|error| format!("Couldn't send audio: {error}"))?;
+        self.audio_timestamp = timestamp_rtp;
+        self.audio_captured = Some(timestamp);
+        self.audio_packets = self.audio_packets.wrapping_add(1);
+        self.audio_octets = self.audio_octets.wrapping_add(opus.len() as u32);
+        Ok(())
+    }
+
     /// Sends one encoded frame, split across as many packets as it takes.
-    pub(super) async fn send_frame(&mut self, frame: &[u8], timestamp: Duration) {
-        let timestamp = self
-            .timestamp_base
-            .wrapping_add((timestamp.as_micros() * 90 / 1000) as u32);
+    pub(super) async fn send_frame(
+        &mut self,
+        frame: &[u8],
+        timestamp: Duration,
+    ) -> Result<(), String> {
+        self.video_captured = Some(timestamp);
+        let timestamp = rtp_timestamp(self.timestamp_base, timestamp, 90_000);
         self.last_timestamp = timestamp;
         self.last_sent = Some(SystemTime::now());
 
         for (payload, marker) in packetize(frame) {
-            self.send_video(payload, timestamp, marker).await;
+            self.send_video(payload, timestamp, marker).await?;
         }
+        Ok(())
     }
 
-    async fn send_video(&mut self, payload: Vec<u8>, timestamp: u32, marker: bool) {
+    async fn send_video(
+        &mut self,
+        payload: Vec<u8>,
+        timestamp: u32,
+        marker: bool,
+    ) -> Result<(), String> {
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
 
@@ -217,7 +315,12 @@ impl Media {
         if let Some(packet) = packet {
             self.packets = self.packets.wrapping_add(1);
             self.octets = self.octets.wrapping_add(payload.len() as u32);
-            let _ = self.socket.send(&packet).await;
+            self.socket
+                .send(&packet)
+                .await
+                .map_err(|error| format!("Couldn't send video: {error}"))?;
+        } else {
+            return Err("Couldn't encrypt video; reconnect the call".into());
         }
 
         self.history[usize::from(sequence) % HISTORY] = Some(Sent {
@@ -226,6 +329,7 @@ impl Media {
             marker,
             payload,
         });
+        Ok(())
     }
 
     /// Resends lost packets on the retransmission stream (RFC 4588): the same
@@ -286,7 +390,7 @@ impl Media {
     fn seal(&mut self, header: &[u8], mut body: Vec<u8>) -> Option<Vec<u8>> {
         let cipher = self.cipher.as_ref()?;
         let counter = self.nonce;
-        self.nonce = self.nonce.wrapping_add(1);
+        self.nonce = self.nonce.checked_add(1)?;
         cipher.seal(counter, header, &mut body).ok()?;
 
         let mut packet = Vec::with_capacity(header.len() + body.len() + 4);
@@ -299,9 +403,36 @@ impl Media {
     /// Sends an RTCP sender report for the video stream, which is what lets a
     /// viewer map its RTP timestamps onto wall-clock time.
     pub(super) async fn send_report(&mut self) {
-        let Some(sent_at) = self.last_sent else {
-            return;
-        };
+        if let Some(timestamp) = self.video_captured {
+            self.sender_report(
+                self.ssrcs.video,
+                self.wall_origin + timestamp,
+                self.last_timestamp,
+                self.packets,
+                self.octets,
+            )
+            .await;
+        }
+        if let Some(timestamp) = self.audio_captured {
+            self.sender_report(
+                self.ssrcs.audio,
+                self.wall_origin + timestamp,
+                self.audio_timestamp,
+                self.audio_packets,
+                self.audio_octets,
+            )
+            .await;
+        }
+    }
+
+    async fn sender_report(
+        &mut self,
+        ssrc: u32,
+        sent_at: SystemTime,
+        timestamp: u32,
+        packets: u32,
+        octets: u32,
+    ) {
         let since_epoch = sent_at.duration_since(UNIX_EPOCH).unwrap_or_default();
         let seconds = since_epoch.as_secs() + NTP_OFFSET;
         let fraction = ((u64::from(since_epoch.subsec_nanos()) << 32) / 1_000_000_000) as u32;
@@ -311,14 +442,14 @@ impl Media {
         header[0] = 0x80;
         header[1] = 200;
         header[2..4].copy_from_slice(&6u16.to_be_bytes());
-        header[4..8].copy_from_slice(&self.ssrcs.video.to_be_bytes());
+        header[4..8].copy_from_slice(&ssrc.to_be_bytes());
 
         let mut body = Vec::with_capacity(20 + 16);
         body.extend_from_slice(&(seconds as u32).to_be_bytes());
         body.extend_from_slice(&fraction.to_be_bytes());
-        body.extend_from_slice(&self.last_timestamp.to_be_bytes());
-        body.extend_from_slice(&self.packets.to_be_bytes());
-        body.extend_from_slice(&self.octets.to_be_bytes());
+        body.extend_from_slice(&timestamp.to_be_bytes());
+        body.extend_from_slice(&packets.to_be_bytes());
+        body.extend_from_slice(&octets.to_be_bytes());
 
         if let Some(packet) = self.seal(&header, body) {
             let _ = self.socket.send(&packet).await;
@@ -606,6 +737,80 @@ fn rand_u32() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn real_udp_keeps_audio_and_video_ssrc_clocks_and_reports_independent() {
+        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let handshake = tokio::spawn(async move {
+            let mut packet = [0u8; 2048];
+            let (length, peer) = server.recv_from(&mut packet).await.unwrap();
+            assert_eq!(length, 74);
+            assert_eq!(&packet[4..8], &11u32.to_be_bytes());
+            let mut response = [0u8; 74];
+            response[..2].copy_from_slice(&2u16.to_be_bytes());
+            response[2..4].copy_from_slice(&70u16.to_be_bytes());
+            response[8..17].copy_from_slice(b"127.0.0.1");
+            response[72..].copy_from_slice(&peer.port().to_be_bytes());
+            server.send_to(&response, peer).await.unwrap();
+            server
+        });
+        let (mut media, _) = Media::connect(
+            address.ip(),
+            address.port(),
+            Ssrcs {
+                audio: 11,
+                video: 12,
+                rtx: 13,
+            },
+        )
+        .await
+        .unwrap();
+        let server = handshake.await.unwrap();
+        media.set_key(AES_MODE, &[7; 32]).unwrap();
+        media.set_clock(MediaClock::default());
+        let audio_base = media.audio_timestamp_base;
+        let video_base = media.timestamp_base;
+        let mut buffer = [0u8; 2048];
+        media
+            .send_audio(&[0xF8, 0xFF, 0xFE], Duration::from_millis(20))
+            .await
+            .unwrap();
+        let (length, _) = server.recv_from(&mut buffer).await.unwrap();
+        let audio = media.open_rtp(&buffer[..length]).unwrap();
+        assert_eq!(
+            (audio.payload_type, audio.ssrc, audio.timestamp),
+            (120, 11, audio_base.wrapping_add(960))
+        );
+        assert_eq!(audio.payload, [0xF8, 0xFF, 0xFE]);
+        media
+            .send_frame(&[0, 0, 0, 1, 0x65, 7], Duration::from_millis(20))
+            .await
+            .unwrap();
+        let (length, _) = server.recv_from(&mut buffer).await.unwrap();
+        let video = media.open_rtp(&buffer[..length]).unwrap();
+        assert_eq!(
+            (video.payload_type, video.ssrc, video.timestamp),
+            (101, 12, video_base.wrapping_add(1800))
+        );
+        assert!(video.marker);
+        media.send_report().await;
+        let (length, _) = server.recv_from(&mut buffer).await.unwrap();
+        let video_report = media.sender_reports(&buffer[..length]).pop().unwrap();
+        let (length, _) = server.recv_from(&mut buffer).await.unwrap();
+        let audio_report = media.sender_reports(&buffer[..length]).pop().unwrap();
+        assert_eq!((video_report.ssrc, audio_report.ssrc), (12, 11));
+        assert_eq!(video_report.ntp, audio_report.ntp);
+        assert_eq!(video_report.timestamp, video.timestamp);
+        assert_eq!(audio_report.timestamp, audio.timestamp);
+        media.nonce = u32::MAX;
+        assert!(
+            media
+                .send_audio(&[1], Duration::from_millis(40))
+                .await
+                .is_err()
+        );
+    }
 
     fn kinds(payloads: &[(Vec<u8>, bool)]) -> Vec<u8> {
         payloads

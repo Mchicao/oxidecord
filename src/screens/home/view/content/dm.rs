@@ -2,28 +2,19 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, v_flex};
+use gpui_component::{Icon, Sizable as _, v_flex};
 
 use crate::discord::DirectMessage;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::view::avatar;
 use crate::ui::button::Button;
 
-use super::{header, header_content, pane};
+use super::{header, header_content};
 
 impl HomeScreen {
     pub(super) fn render_dm_content(&self, cx: &Context<Self>) -> AnyElement {
         let Some(dm) = self.selected_dm_info().cloned() else {
-            return pane(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Select a conversation to start chatting.")
-                    .into_any_element(),
-                cx,
-            );
+            return self.render_friends_pane(cx);
         };
 
         v_flex()
@@ -68,10 +59,19 @@ impl HomeScreen {
                             .icon(Icon::default().path("icons/video.svg"))
                             .ghost()
                             .small()
-                            .disabled(true)
-                            .tooltip("Video isn't supported yet"),
+                            .tooltip("Start a call, then enable your camera")
+                            .on_click(cx.listener(|this, _, _, cx| this.start_dm_call(cx))),
                     )
                 })
+                .child(self.render_inbox_button(cx))
+                .child(
+                    Button::new("dm-pins")
+                        .icon(Icon::default().path("icons/pin.svg"))
+                        .small()
+                        .ghost()
+                        .tooltip("Pinned Messages")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_pin_panel(cx))),
+                )
                 .child(self.render_search_box(cx)),
             cx,
         )

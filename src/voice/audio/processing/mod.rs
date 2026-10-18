@@ -1,5 +1,5 @@
 mod engine;
-mod resample;
+pub(in crate::voice::audio) mod resample;
 
 pub const LICENSE: &str = include_str!("SONORA-LICENSE");
 

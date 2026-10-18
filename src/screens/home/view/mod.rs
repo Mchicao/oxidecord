@@ -1,14 +1,14 @@
 //! Rendering for [`HomeScreen`], one module per region of the screen.
 
 mod composer;
-mod content;
+pub(in crate::screens::home) mod content;
 mod markdown;
 mod member_list;
 mod message;
 mod profile;
 mod rail;
 mod sidebar;
-mod user_panel;
+pub(in crate::screens::home) mod user_panel;
 mod voice;
 
 use gpui::prelude::FluentBuilder as _;
@@ -52,6 +52,7 @@ impl Render for HomeScreen {
         // A watched stream is decoded at most at the window's size, which is
         // as large as the stage can draw it.
         self.release_stream_frames(window);
+        self.release_camera_frames(window);
         if let Some(stream) = self
             .watching
             .as_ref()
@@ -119,11 +120,12 @@ impl Render for HomeScreen {
                     .size_full()
                     .min_h_0()
                     .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .w_full()
-                            .child(self.render_content(cx)),
+                        div().flex_1().min_h_0().w_full().child(
+                            h_flex()
+                                .size_full()
+                                .child(self.render_content(cx))
+                                .children(self.render_message_tools(cx)),
+                        ),
                     )
                     .when_some(connection_notice, |this, label| {
                         this.child(
@@ -144,6 +146,8 @@ impl Render for HomeScreen {
             ))
             .children(self.render_profile_popup(cx))
             .children(self.render_emoji_picker(cx))
+            .children(self.render_inbox(cx))
+            .children(self.render_thread_create_form(cx))
     }
 }
 
@@ -190,7 +194,7 @@ fn inset(content: AnyElement, cx: &App) -> impl IntoElement {
 
 /// An avatar with its picture when there is one, and the name's initials
 /// otherwise.
-fn avatar(name: String, url: Option<String>, size: Pixels) -> Avatar {
+pub(in crate::screens::home) fn avatar(name: String, url: Option<String>, size: Pixels) -> Avatar {
     let avatar = Avatar::new().name(name).with_size(size);
     match url {
         Some(url) => avatar.src(url),

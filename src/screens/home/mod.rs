@@ -7,18 +7,25 @@
 //! - [`data`] — everything that talks to [`crate::discord`] and mutates state.
 //! - [`view`] — everything that renders that state.
 
+mod camera;
 mod channels;
 mod data;
 mod emoji;
 mod folders;
+mod inbox;
+mod message_tools;
 mod navigation;
+mod peer_audio;
+mod relationships;
 mod state;
+mod threads;
 mod unread;
 mod view;
 mod voice;
 
 use gpui::{EventEmitter, actions};
 
+pub(in crate::screens::home) use navigation::MessageTarget;
 pub use state::HomeScreen;
 
 /// Emitted when the user logs out or Discord rejects the stored token, so the

@@ -54,7 +54,7 @@ impl HomeScreen {
 /// parent. Window-control hitboxes are resolved in paint order, so a region
 /// wrapping the buttons would be found first and swallow every click meant for
 /// them.
-pub(super) fn header(content: impl IntoElement, cx: &App) -> impl IntoElement {
+pub(in crate::screens::home) fn header(content: impl IntoElement, cx: &App) -> impl IntoElement {
     h_flex()
         .h(px(HEADER_HEIGHT))
         .w_full()
@@ -74,7 +74,7 @@ pub(super) fn header(content: impl IntoElement, cx: &App) -> impl IntoElement {
 
 /// The left half of [`header`], holding whatever names the conversation. Empty
 /// is fine — it still has to be there to drag the window by.
-pub(super) fn header_content() -> Stateful<Div> {
+pub(in crate::screens::home) fn header_content() -> Stateful<Div> {
     h_flex()
         .id("conversation-header")
         .flex_1()
@@ -94,7 +94,6 @@ const SEARCH_WIDTH: f32 = 200.;
 
 impl HomeScreen {
     /// The message search box at the right of a conversation's header.
-    /// Only there to be drawn for now: typing in it searches nothing.
     pub(super) fn render_search_box(&self, cx: &App) -> impl IntoElement {
         div().w(px(SEARCH_WIDTH)).flex_shrink_0().child(
             Input::new(&self.search_input).small().suffix(

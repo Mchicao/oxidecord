@@ -6,8 +6,12 @@
 mod auth;
 mod channel;
 mod guild;
+pub(crate) mod inbox;
 mod message;
+pub(crate) mod message_tools;
+pub(crate) mod relationships;
 mod settings;
+pub(crate) mod threads;
 mod user;
 
 use std::sync::Arc;
@@ -18,7 +22,7 @@ use crate::discord::token;
 use crate::platform::runtime;
 
 pub use auth::log_out;
-pub use channel::{fetch_dms, ring_call};
+pub use channel::{fetch_dms, fetch_thread, ring_call};
 pub use guild::{fetch_channels, fetch_guilds};
 pub use message::{
     MAX_ATTACHMENT_SIZE, MESSAGE_PAGE_SIZE, MessagePage, REACTORS_PAGE_SIZE, ack_message,

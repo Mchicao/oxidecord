@@ -14,6 +14,7 @@ mod member_list;
 mod message;
 mod read_state;
 mod settings;
+pub(in crate::discord) mod threads;
 mod time;
 mod user;
 mod voice;
@@ -32,6 +33,7 @@ pub use message::{
 };
 pub use read_state::{ChannelLatest, GuildUnreads, MuteSettings, ReadState, UnreadChannel};
 pub use settings::{GuildFolders, PresenceStatus, UserSettings};
+pub use threads::{ArchivedCursor, ArchivedScope, ForumTag, ThreadEvent, ThreadSummary};
 pub use user::{CurrentUser, Reactor, UserProfile};
 pub use voice::{StreamServerInfo, VoiceServerInfo, VoiceUserState, stream_key};
 

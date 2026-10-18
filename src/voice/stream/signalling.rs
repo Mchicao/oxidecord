@@ -1,9 +1,8 @@
 //! The stream's voice websocket: the handshake, heartbeats, and DAVE.
 //!
-//! This is the same voice gateway a call talks to, at version 8, with the
-//! stream's own server and token. songbird can't be pointed at it — it has
-//! no way to announce video — so the protocol is spoken here directly, and
-//! DAVE's handshake is ported from songbird's with davey doing the MLS.
+//! The primary call and each Go Live stream use this version 8 voice gateway
+//! implementation, with separate server credentials and UDP/MLS sessions.
+//! Camera shares the primary call's session; davey handles MLS for each one.
 //!
 //! DAVE runs as an MLS group per connection: the voice server proposes
 //! members as they connect, one member commits, and once the commit lands
@@ -16,10 +15,10 @@
 //! streamer's picture.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU16;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use davey::{Codec, DaveSession, MediaType, ProposalsOperationType};
 use futures::{SinkExt as _, StreamExt as _};
@@ -40,6 +39,9 @@ mod op {
     pub const HEARTBEAT: u8 = 3;
     pub const SESSION_DESCRIPTION: u8 = 4;
     pub const SPEAKING: u8 = 5;
+    pub const HEARTBEAT_ACK: u8 = 6;
+    pub const RESUME: u8 = 7;
+    pub const RESUMED: u8 = 9;
     pub const HELLO: u8 = 8;
     pub const MEDIA_SINK_WANTS: u8 = 15;
     pub const CLIENTS_CONNECT: u8 = 11;
@@ -74,9 +76,16 @@ pub(super) struct Ready {
 /// Where a streamer's picture arrives, as the server's `VIDEO` says.
 #[derive(Clone, Copy)]
 pub(super) struct RemoteVideo {
+    pub user_id: u64,
     pub ssrc: u32,
     /// Where retransmissions arrive, when the sender has said.
     pub rtx_ssrc: Option<u32>,
+}
+
+pub(super) enum Change {
+    Speaking { user_id: u64, speaking: bool },
+    Video { user_id: u64, active: bool },
+    Left { user_id: u64 },
 }
 
 /// What a message from the server meant for the rest of the stream.
@@ -102,6 +111,11 @@ pub(super) struct Signalling {
     /// as a [`Signal`] because the server can announce it during the
     /// handshake, before anyone is reading signals.
     pub remote: Option<RemoteVideo>,
+    pub videos: HashMap<u64, RemoteVideo>,
+    pub audio: HashMap<u32, u64>,
+    changes: VecDeque<Change>,
+    pending_heartbeat: Option<Instant>,
+    pub resumable: bool,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +145,8 @@ struct ReadyPayload {
 #[derive(Deserialize)]
 struct ReadyStream {
     ssrc: u32,
-    rtx_ssrc: u32,
+    #[serde(default)]
+    rtx_ssrc: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +160,10 @@ struct SessionDescription {
 #[derive(Deserialize)]
 struct VideoPayload {
     #[serde(default)]
+    user_id: String,
+    #[serde(default)]
+    audio_ssrc: u32,
+    #[serde(default)]
     video_ssrc: u32,
     #[serde(default)]
     streams: Vec<VideoStream>,
@@ -156,6 +175,19 @@ struct VideoStream {
     ssrc: u32,
     #[serde(default)]
     rtx_ssrc: Option<u32>,
+    #[serde(default = "active_default")]
+    active: bool,
+}
+
+fn active_default() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct SpeakingPayload {
+    user_id: String,
+    ssrc: u32,
+    speaking: u32,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +218,18 @@ impl Signalling {
     /// where to send media. Anything else it says meanwhile is handled as it
     /// arrives.
     pub(super) async fn connect(connection: &StreamConnection) -> Result<(Self, Ready), String> {
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            Self::connect_kind(connection, "screen"),
+        )
+        .await
+        .map_err(|_| "Stream handshake timed out")?
+    }
+
+    pub(super) async fn connect_kind(
+        connection: &StreamConnection,
+        kind: &str,
+    ) -> Result<(Self, Ready), String> {
         let url = format!("wss://{}/?v={VOICE_GATEWAY_VERSION}", connection.endpoint);
         let (ws, _) = tokio_websockets::ClientBuilder::new()
             .uri(&url)
@@ -202,6 +246,11 @@ impl Signalling {
             dave: Dave::new(user_id, connection.dave_channel_id),
             early: Some(Vec::new()),
             remote: None,
+            videos: HashMap::new(),
+            audio: HashMap::new(),
+            changes: VecDeque::new(),
+            pending_heartbeat: None,
+            resumable: true,
         };
 
         this.send_json(
@@ -214,7 +263,7 @@ impl Signalling {
                 "video": true,
                 // One stream, sent at full quality. Simulcast would offer
                 // viewers a choice of sizes, at the cost of encoding each.
-                "streams": [{ "type": "screen", "rid": "100", "quality": 100 }],
+                "streams": [{ "type": kind, "rid": "100", "quality": 100 }],
                 "max_dave_protocol_version": davey::DAVE_PROTOCOL_VERSION,
             }),
         )
@@ -229,6 +278,11 @@ impl Signalling {
             match envelope.op {
                 op::HELLO => {
                     let payload: HelloPayload = parse(envelope.d)?;
+                    if !payload.heartbeat_interval.is_finite()
+                        || !(100. ..=300_000.).contains(&payload.heartbeat_interval)
+                    {
+                        return Err("The voice server sent an invalid heartbeat interval".into());
+                    }
                     hello = Some(Duration::from_secs_f64(payload.heartbeat_interval / 1000.));
                 }
                 op::READY => ready = Some(parse::<ReadyPayload>(envelope.d)?),
@@ -243,10 +297,10 @@ impl Signalling {
         this.heartbeat = heartbeat;
 
         // The streams come back in the order they were offered, and one was.
-        let stream = ready
-            .streams
-            .first()
-            .ok_or("The stream server assigned no video stream")?;
+        let stream = ready.streams.first();
+        if stream.is_none() && kind == "screen" {
+            return Err("The stream server assigned no video stream".into());
+        }
         // aes-256-gcm where the server offers it, as Discord asks; the
         // xchacha fallback is the one every server must support.
         let mode = if ready.modes.iter().any(|mode| mode == AES_MODE) {
@@ -262,8 +316,12 @@ impl Signalling {
             port: ready.port,
             ssrcs: Ssrcs {
                 audio: ready.ssrc,
-                video: stream.ssrc,
-                rtx: stream.rtx_ssrc,
+                video: stream.map_or(0, |stream| stream.ssrc),
+                rtx: stream.map_or(0, |stream| {
+                    stream
+                        .rtx_ssrc
+                        .unwrap_or_else(|| stream.ssrc.wrapping_add(1))
+                }),
             },
             mode,
         };
@@ -326,7 +384,23 @@ impl Signalling {
         size: (u32, u32),
         fps: u32,
         bitrate: u32,
+        audio: bool,
     ) -> Result<(), String> {
+        self.set_video(ssrcs, Some((size, fps, bitrate))).await?;
+        self.set_speaking(ssrcs.audio, u8::from(audio) << 1).await
+    }
+
+    pub(super) async fn set_video(
+        &mut self,
+        ssrcs: Ssrcs,
+        description: Option<((u32, u32), u32, u32)>,
+    ) -> Result<(), String> {
+        let Some((size, fps, bitrate)) = description else {
+            return self.send_json(op::VIDEO, json!({"audio_ssrc": ssrcs.audio, "video_ssrc": 0, "rtx_ssrc": 0, "streams": []})).await;
+        };
+        if ssrcs.video == 0 {
+            return Err("The voice server did not negotiate camera video".into());
+        }
         self.send_json(
             op::VIDEO,
             json!({
@@ -346,15 +420,26 @@ impl Signalling {
                 }],
             }),
         )
-        .await?;
+        .await
+    }
 
-        // A stream's "speaking" flag is soundshare rather than microphone,
-        // and it's what the client shows the stream as live on.
+    pub(super) async fn set_speaking(&mut self, ssrc: u32, flags: u8) -> Result<(), String> {
         self.send_json(
             op::SPEAKING,
-            json!({ "speaking": 2, "delay": 0, "ssrc": ssrcs.audio }),
+            json!({"speaking": flags, "delay": 0, "ssrc": ssrc}),
         )
         .await
+    }
+
+    pub(super) fn changes(&mut self) -> impl Iterator<Item = Change> + '_ {
+        self.changes.drain(..)
+    }
+
+    fn changed(&mut self, change: Change) {
+        if self.changes.len() == 512 {
+            self.changes.pop_front();
+        }
+        self.changes.push_back(change);
     }
 
     /// Tells the server this connection only watches: its video is
@@ -383,6 +468,15 @@ impl Signalling {
     }
 
     pub(super) async fn send_heartbeat(&mut self) -> Result<(), String> {
+        if self
+            .pending_heartbeat
+            .is_some_and(|sent| sent.elapsed() > self.heartbeat * 2)
+        {
+            return Err("The voice server stopped acknowledging heartbeats".into());
+        }
+        if self.pending_heartbeat.is_none() {
+            self.pending_heartbeat = Some(Instant::now());
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -404,6 +498,7 @@ impl Signalling {
 
         if let Some((code, reason)) = message.as_close() {
             let code = u16::from(code);
+            self.resumable = matches!(code, 1001 | 1006 | 4015);
             return Ok(Signal::Closed(if code == CLOSE_DISCONNECTED {
                 None
             } else {
@@ -462,29 +557,83 @@ impl Signalling {
 
     async fn handle_json(&mut self, envelope: Envelope) -> Result<(), String> {
         match envelope.op {
+            op::HEARTBEAT_ACK => self.pending_heartbeat = None,
+            op::HEARTBEAT => self.send_heartbeat().await?,
+            op::SPEAKING => {
+                if let Ok(payload) = parse::<SpeakingPayload>(envelope.d)
+                    && let Ok(user_id) = payload.user_id.parse::<u64>()
+                {
+                    if self.audio.len() >= 512 && !self.audio.contains_key(&payload.ssrc) {
+                        return Err("Too many remote audio streams".into());
+                    }
+                    self.audio.insert(payload.ssrc, user_id);
+                    self.changed(Change::Speaking {
+                        user_id,
+                        speaking: payload.speaking & 1 != 0,
+                    });
+                }
+            }
             op::VIDEO => {
                 if let Ok(payload) = parse::<VideoPayload>(envelope.d) {
                     let stream = payload
                         .streams
                         .iter()
-                        .find(|stream| stream.ssrc == payload.video_ssrc)
-                        .or_else(|| payload.streams.iter().find(|stream| stream.ssrc != 0));
+                        .find(|stream| stream.ssrc == payload.video_ssrc && stream.active)
+                        .or_else(|| {
+                            payload
+                                .streams
+                                .iter()
+                                .find(|stream| stream.ssrc != 0 && stream.active)
+                        });
                     // A zero SSRC with no streams is the sender clearing its
                     // video; what's known of it stays, since a stream that
                     // resumes does so on the same SSRCs.
                     let ssrc = stream.map_or(payload.video_ssrc, |stream| stream.ssrc);
-                    if ssrc != 0 {
-                        self.remote = Some(RemoteVideo {
+                    let user_id = payload.user_id.parse::<u64>().unwrap_or(0);
+                    if payload.audio_ssrc != 0 && user_id != 0 {
+                        if self.audio.len() >= 512 && !self.audio.contains_key(&payload.audio_ssrc)
+                        {
+                            return Err("Too many remote audio streams".into());
+                        }
+                        self.audio.insert(payload.audio_ssrc, user_id);
+                    }
+                    if ssrc != 0 && (stream.is_some() || payload.streams.is_empty()) {
+                        let remote = RemoteVideo {
+                            user_id,
                             ssrc,
                             rtx_ssrc: stream
                                 .and_then(|stream| stream.rtx_ssrc)
-                                .filter(|&rtx| rtx != 0),
+                                .filter(|&rtx| rtx != 0)
+                                .or_else(|| ssrc.checked_add(1)),
+                        };
+                        self.remote = Some(remote);
+                        if user_id != 0 {
+                            if self.videos.len() >= 128 && !self.videos.contains_key(&user_id) {
+                                return Err("Too many remote video streams".into());
+                            }
+                            self.videos.insert(user_id, remote);
+                            self.changed(Change::Video {
+                                user_id,
+                                active: true,
+                            });
+                        }
+                    } else {
+                        self.videos.remove(&user_id);
+                        if self.remote.is_some_and(|remote| remote.user_id == user_id) {
+                            self.remote = None;
+                        }
+                        self.changed(Change::Video {
+                            user_id,
+                            active: false,
                         });
                     }
                 }
             }
             op::CLIENTS_CONNECT => {
                 if let Ok(payload) = parse::<ClientsConnect>(envelope.d) {
+                    if self.dave.members.len() + payload.user_ids.len() > 512 {
+                        return Err("Too many voice group members".into());
+                    }
                     self.dave.members.extend(
                         payload
                             .user_ids
@@ -498,6 +647,9 @@ impl Signalling {
                     && let Ok(id) = payload.user_id.parse::<u64>()
                 {
                     self.dave.members.remove(&id);
+                    self.audio.retain(|_, user| *user != id);
+                    self.videos.remove(&id);
+                    self.changed(Change::Left { user_id: id });
                 }
             }
             op::DAVE_PREPARE_TRANSITION => {
@@ -539,6 +691,11 @@ impl Signalling {
         };
         self.seq_ack = i64::from(u16::from_be_bytes([*seq_high, *seq_low]));
         if let Some(early) = &mut self.early {
+            if early.len() >= 128
+                || early.iter().map(Vec::len).sum::<usize>() + data.len() > 1_048_576
+            {
+                return Err("The voice server exceeded the handshake buffer limit".into());
+            }
             early.push(data.to_vec());
             return Ok(());
         }
@@ -651,6 +808,43 @@ impl Signalling {
             .await
             .map_err(|err| format!("Lost the stream server: {err}"))
     }
+
+    pub(super) async fn resume(&mut self, connection: &StreamConnection) -> Result<(), String> {
+        if !self.resumable {
+            return Err("This voice session cannot be resumed".into());
+        }
+        let _ = self.ws.close().await;
+        let url = format!("wss://{}/?v={VOICE_GATEWAY_VERSION}", connection.endpoint);
+        let (ws, _) = tokio_websockets::ClientBuilder::new()
+            .uri(&url)
+            .map_err(|_| "Invalid voice endpoint")?
+            .connect()
+            .await
+            .map_err(|e| format!("Couldn't resume voice: {e}"))?;
+        // Replacing the old websocket closes it; the UDP socket and MLS group stay unique.
+        self.ws = ws;
+        self.pending_heartbeat = None;
+        self.send_json(op::RESUME, json!({"server_id": connection.server_id, "session_id": connection.session_id, "token": connection.token, "seq_ack": self.seq_ack})).await?;
+        loop {
+            let Some(envelope) = self.next_json().await? else {
+                return Err("Voice resume was closed".into());
+            };
+            if envelope.op == op::RESUMED {
+                return Ok(());
+            }
+            if envelope.op == op::HELLO {
+                let hello: HelloPayload = parse(envelope.d)?;
+                if !hello.heartbeat_interval.is_finite()
+                    || !(100. ..=300_000.).contains(&hello.heartbeat_interval)
+                {
+                    return Err("Invalid resume heartbeat".into());
+                }
+                self.heartbeat = Duration::from_secs_f64(hello.heartbeat_interval / 1000.);
+            } else {
+                self.handle_json(envelope).await?;
+            }
+        }
+    }
 }
 
 pub(super) struct Dave {
@@ -747,6 +941,30 @@ impl Dave {
     /// frame can't be sent at all: anything sent then is something no viewer
     /// could decrypt.
     pub(super) fn protect<'a>(&mut self, frame: &'a [u8]) -> Option<Cow<'a, [u8]>> {
+        self.protect_media(frame, MediaType::VIDEO, Codec::H264)
+    }
+
+    pub(super) fn protect_audio<'a>(&mut self, frame: &'a [u8]) -> Option<Cow<'a, [u8]>> {
+        self.protect_media(frame, MediaType::AUDIO, Codec::OPUS)
+    }
+
+    pub(super) fn unprotect_audio(&mut self, sender: u64, frame: Vec<u8>) -> Option<Vec<u8>> {
+        if self.protocol_version == 0 {
+            return Some(frame);
+        }
+        let session = self.session.as_mut()?;
+        if !session.is_ready() {
+            return None;
+        }
+        session.decrypt(sender, MediaType::AUDIO, &frame).ok()
+    }
+
+    fn protect_media<'a>(
+        &mut self,
+        frame: &'a [u8],
+        media: MediaType,
+        codec: Codec,
+    ) -> Option<Cow<'a, [u8]>> {
         if self.protocol_version == 0 {
             return Some(Cow::Borrowed(frame));
         }
@@ -754,7 +972,7 @@ impl Dave {
         if !session.is_ready() {
             return None;
         }
-        match session.encrypt(MediaType::VIDEO, Codec::H264, frame) {
+        match session.encrypt(media, codec, frame) {
             Ok(frame) => Some(frame),
             Err(err) => {
                 eprintln!("DAVE: couldn't encrypt a frame: {err}");
@@ -767,4 +985,20 @@ impl Dave {
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value)
         .map_err(|err| format!("Unexpected message from the stream server: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_and_video_are_both_withheld_until_the_mls_group_is_ready() {
+        let mut dave = Dave::new(1, 2);
+        dave.protocol_version = davey::DAVE_PROTOCOL_VERSION;
+        let _package = dave.reinit().unwrap();
+        assert!(!dave.is_ready());
+        assert!(dave.protect_audio(&[1, 2, 3]).is_none());
+        assert!(dave.protect(&[0, 0, 0, 1, 0x65, 1]).is_none());
+        assert!(dave.unprotect_audio(3, vec![1, 2, 3]).is_none());
+    }
 }

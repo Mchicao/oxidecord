@@ -1,5 +1,6 @@
 //! Every sender summed and laid out for the speakers.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::{FromSample, SizedSample};
@@ -35,6 +36,21 @@ fn limit(sample: f32) -> f32 {
     (THRESHOLD + HEADROOM * over.tanh()).copysign(sample)
 }
 
+/// Duration of the gain ramp applied to each peer when their volume or mute state changes.
+pub(super) const PEER_GAIN_RAMP_MS: f32 = 0.005;
+/// Ramp step per sample at 48kHz stereo (~5ms duration).
+pub(super) const PEER_GAIN_STEP: f32 =
+    1. / (SAMPLE_RATE as f32 * CHANNELS as f32 * PEER_GAIN_RAMP_MS);
+
+pub(super) struct StreamEntry {
+    pub(super) ssrc: u32,
+    pub(super) ring: Arc<SampleRing>,
+    pub(super) target_gain: Arc<AtomicU32>,
+    pub(super) muted: Arc<AtomicBool>,
+    pub(super) ramp: GainRamp,
+    pub(super) was_muted: bool,
+}
+
 /// Everyone audible in the call, one ring per sender, summed on the way out.
 ///
 /// Each sender's packets keep their own clock and their own jitter, so each
@@ -43,17 +59,18 @@ fn limit(sample: f32) -> f32 {
 pub(super) struct Mixer {
     /// Keyed by SSRC. A list rather than a map because the audio callback
     /// walks all of it every time and looks nothing up.
-    rings: Mutex<Vec<(u32, Arc<SampleRing>)>>,
+    streams: Mutex<Vec<StreamEntry>>,
     control: Arc<AudioControl>,
 }
 
 impl Mixer {
     pub(super) fn new(control: Arc<AudioControl>) -> Self {
         Self {
-            rings: Mutex::default(),
+            streams: Mutex::default(),
             control,
         }
     }
+
     /// Fills `out` with every sender summed. `stream` is scratch space for
     /// one sender's share, held by the caller so the audio thread doesn't
     /// allocate.
@@ -66,11 +83,27 @@ impl Mixer {
         // is the exact window the sum walks, so no old audio can leak back.
         stream.resize(out.len(), 0.);
 
-        if let Ok(rings) = self.rings.lock() {
-            for (_, ring) in rings.iter() {
-                ring.fill(stream);
+        if let Ok(mut streams) = self.streams.lock() {
+            for entry in streams.iter_mut() {
+                let is_muted = entry.muted.load(Ordering::Relaxed);
+                let target_gain = if is_muted {
+                    0.0
+                } else {
+                    f32::from_bits(entry.target_gain.load(Ordering::Relaxed))
+                };
+
+                // While locally muted, discard incoming audio.
+                // When transitioning from muted to unmuted, also clear the ring
+                // so old stale PCM queued while muted does not resurface.
+                if is_muted || entry.was_muted {
+                    entry.ring.clear();
+                }
+                entry.was_muted = is_muted;
+
+                entry.ring.fill(stream);
                 for (slot, sample) in out.iter_mut().zip(stream.iter()) {
-                    *slot += sample;
+                    let scaled = entry.ramp.apply(*sample, target_gain, PEER_GAIN_STEP);
+                    *slot += scaled;
                 }
             }
         }
@@ -80,21 +113,45 @@ impl Mixer {
         }
     }
 
-    pub(super) fn add(&self, ssrc: u32, ring: Arc<SampleRing>) {
-        if let Ok(mut rings) = self.rings.lock() {
-            rings.push((ssrc, ring));
+    pub(super) fn add_with_user(&self, ssrc: u32, user_id: Option<u64>, ring: Arc<SampleRing>) {
+        let (target_gain, muted) = if let Some(uid) = user_id {
+            let ctrl = self.control.peer_settings.get_or_create(uid);
+            (ctrl.target_gain, ctrl.muted)
+        } else {
+            (
+                Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                Arc::new(AtomicBool::new(false)),
+            )
+        };
+
+        let initial_gain = if muted.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            f32::from_bits(target_gain.load(Ordering::Relaxed))
+        };
+
+        if let Ok(mut streams) = self.streams.lock() {
+            streams.retain(|e| e.ssrc != ssrc);
+            streams.push(StreamEntry {
+                ssrc,
+                ring,
+                target_gain,
+                muted,
+                ramp: GainRamp::new(initial_gain),
+                was_muted: initial_gain == 0.0,
+            });
         }
     }
 
     pub(super) fn remove(&self, ssrc: u32) {
-        if let Ok(mut rings) = self.rings.lock() {
-            rings.retain(|(id, _)| *id != ssrc);
+        if let Ok(mut streams) = self.streams.lock() {
+            streams.retain(|e| e.ssrc != ssrc);
         }
     }
 
     pub(super) fn clear(&self) {
-        if let Ok(mut rings) = self.rings.lock() {
-            rings.clear();
+        if let Ok(mut streams) = self.streams.lock() {
+            streams.clear();
         }
     }
 }
@@ -157,10 +214,6 @@ impl Playback {
             return;
         }
 
-        // How many source frames the loop below will step through. Counted by
-        // walking the same additions in the same order rather than by the
-        // closed form, which rounds differently often enough to leave the
-        // resampler a frame out of step for the rest of the call.
         let mut phase = self.phase;
         let mut pulls = 0;
         for _ in 0..frames {
@@ -171,11 +224,6 @@ impl Playback {
             }
         }
 
-        // Resized to the exact window this callback pulls rather than
-        // cleared: a shrink leaves the surplus slots unread past the length,
-        // a grow zero-fills only the new few, and the mixer's accumulator
-        // pass overwrites the whole buffer before it is read. Once the
-        // device's buffer size has settled this is a no-op.
         self.scratch.resize(pulls * CHANNELS, 0.);
         self.mixer.fill(&mut self.scratch, &mut self.stream);
 
@@ -194,8 +242,6 @@ impl Playback {
             {
                 let (previous, next) = match channel {
                     0 | 1 => (self.previous[channel], self.next[channel]),
-                    // Anything past stereo (a surround device) gets the mix,
-                    // which is better than leaving those speakers silent.
                     _ => (
                         (self.previous[0] + self.previous[1]) / 2.,
                         (self.next[0] + self.next[1]) / 2.,
@@ -220,7 +266,6 @@ impl Playback {
             }
         }
 
-        // Whatever the device asked for beyond a whole number of frames.
         out[frames * self.channels..].fill(T::EQUILIBRIUM);
     }
 }
@@ -240,7 +285,7 @@ pub(super) mod tests {
         let control = Arc::new(AudioControl::new(&AudioPreferences::default()));
         let mixer = Arc::new(Mixer::new(control.clone()));
         let ring = Arc::new(SampleRing::new(48_000, 2, 0));
-        mixer.add(1, ring.clone());
+        mixer.add_with_user(1, None, ring.clone());
         let mut playback = Playback::new(mixer, 48_000, 2);
         for gain in [1., 0., 0.5, 2.] {
             control.configure(
@@ -285,13 +330,59 @@ pub(super) mod tests {
         assert_eq!(out[2047], 0.);
     }
 
-    /// The test binary's allocator, instrumented so tests can prove things
-    /// stopped allocating without asserting on private structure.
-    ///
-    /// Events are counted twice: per thread (see [`allocations_here`]) and
-    /// process-wide (see [`allocations`]); bytes handed out are tracked
-    /// process-wide only. Deallocations are not events, but they do return
-    /// bytes to [`live_bytes`].
+    #[test]
+    fn peer_gain_and_local_mute_per_user_isolation_and_reconnect() {
+        let control = Arc::new(AudioControl::new(&AudioPreferences::default()));
+        let mixer = Arc::new(Mixer::new(control.clone()));
+        let ring_a = Arc::new(SampleRing::new(48_000, 2, 0));
+        let ring_b = Arc::new(SampleRing::new(48_000, 2, 0));
+
+        let user_a = 111111u64;
+        let user_b = 222222u64;
+
+        // Configure user A to 150% volume, user B to 50% volume and locally muted
+        control.peer_settings.set_volume(user_a, 1.5).unwrap();
+        control.peer_settings.set_volume(user_b, 0.5).unwrap();
+        control.peer_settings.set_muted(user_b, true);
+
+        mixer.add_with_user(10, Some(user_a), ring_a.clone());
+        mixer.add_with_user(20, Some(user_b), ring_b.clone());
+
+        // Check mixer fill
+        let mut out = [0f32; 2048];
+        let mut stream = Vec::new();
+        for _ in 0..8 {
+            ring_a.push(std::iter::repeat_n(0.2, out.len()));
+            ring_b.push(std::iter::repeat_n(0.4, out.len()));
+            mixer.fill(&mut out, &mut stream);
+        }
+
+        // User B is muted, so its samples contribute 0. User A is 1.5x, so 0.2 * 1.5 = 0.3
+        assert!((out[2047] - 0.3).abs() < 0.001);
+
+        // Now unmute User B
+        control.peer_settings.set_muted(user_b, false);
+        for _ in 0..8 {
+            ring_a.push(std::iter::repeat_n(0.2, out.len()));
+            ring_b.push(std::iter::repeat_n(0.4, out.len()));
+            mixer.fill(&mut out, &mut stream);
+        }
+        // User A (0.3) + User B (0.4 * 0.5 = 0.2) = 0.5
+        assert!((out[2047] - 0.5).abs() < 0.001);
+
+        // Reconnect user A with new SSRC 30
+        mixer.remove(10);
+        let ring_a_new = Arc::new(SampleRing::new(48_000, 2, 0));
+        mixer.add_with_user(30, Some(user_a), ring_a_new.clone());
+        for _ in 0..8 {
+            ring_a_new.push(std::iter::repeat_n(0.2, out.len()));
+            ring_b.push(std::iter::repeat_n(0.4, out.len()));
+            mixer.fill(&mut out, &mut stream);
+        }
+        // User A's 1.5x setting was preserved without leak
+        assert!((out[2047] - 0.5).abs() < 0.001);
+    }
+
     struct CountingAlloc;
 
     thread_local! {
@@ -302,8 +393,6 @@ pub(super) mod tests {
     static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
     static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
 
-    /// Adds to the live-byte count and raises the high-water mark if the
-    /// addition passed it.
     fn account(delta: i64) {
         let live = LIVE_BYTES.fetch_add(delta, Ordering::Relaxed) + delta;
         loop {
@@ -355,40 +444,22 @@ pub(super) mod tests {
     #[global_allocator]
     static ALLOCATOR: CountingAlloc = CountingAlloc;
 
-    /// Allocation events (`alloc`, `realloc` and `alloc_zeroed` calls;
-    /// deallocations are not events) on every thread of the test binary,
-    /// counted from process start. This is the counter for work done on
-    /// threads of their own — a worker's allocations land here even when the
-    /// test drives it from another thread. Other tests running in parallel
-    /// are counted too, so a before/after window is only meaningful when the
-    /// measured work out-allocates that noise or the binary runs
-    /// single-threaded.
     pub(in crate::voice::audio) fn allocations() -> u64 {
         TOTAL_ALLOCS.load(Ordering::Relaxed)
     }
 
-    /// [`allocations`] restricted to the calling thread: immune to tests
-    /// running in parallel, and blind to anything the code under test does
-    /// on its own threads.
     pub(in crate::voice::audio) fn allocations_here() -> u64 {
         CALLBACK_ALLOCS.with(Cell::get)
     }
 
-    /// Bytes currently handed out, across every thread. A snapshot taken
-    /// while other threads are mid-allocation is approximate, never torn.
-    /// This is book-keeping inside the test binary; it says nothing about
-    /// the process's working set or private bytes.
     pub(in crate::voice::audio) fn live_bytes() -> u64 {
         LIVE_BYTES.load(Ordering::Relaxed).max(0) as u64
     }
 
-    /// The high-water mark of [`live_bytes`] since process start.
     pub(in crate::voice::audio) fn peak_bytes() -> u64 {
         PEAK_BYTES.load(Ordering::Relaxed).max(0) as u64
     }
 
-    /// One playback chain — a mixer, a sender's ring, a renderer — driven by
-    /// hand, with a second sender that can join mid-run.
     struct Rig {
         mixer: Arc<Mixer>,
         ring: Arc<SampleRing>,
@@ -399,7 +470,7 @@ pub(super) mod tests {
         let control = Arc::new(AudioControl::new(&AudioPreferences::default()));
         let mixer = Arc::new(Mixer::new(control));
         let ring = Arc::new(SampleRing::new(48_000, 2, 0));
-        mixer.add(1, ring.clone());
+        mixer.add_with_user(1, None, ring.clone());
         Rig {
             mixer: mixer.clone(),
             ring,
@@ -407,7 +478,6 @@ pub(super) mod tests {
         }
     }
 
-    /// Deterministic noise: same seed, same waveform, in any number of rigs.
     struct Noise(u64);
 
     impl Noise {
@@ -430,8 +500,6 @@ pub(super) mod tests {
             (48_000, 6),
         ] {
             let mut live = rig(rate, channels);
-            // Re-zeroed between callbacks, exactly as the scratch behaved
-            // before it was reused: the reference the reuse must match.
             let mut zeroed = rig(rate, channels);
             let mut noise = Noise(0x5EED);
             let sizes = [
@@ -446,34 +514,29 @@ pub(super) mod tests {
             ];
             for (round, size) in sizes.into_iter().enumerate() {
                 match round {
-                    // Fresh audio, identical in both rigs.
                     0 | 1 => {
                         let chunk: Vec<f32> = (0..8192).map(|_| noise.next() * 0.4).collect();
                         live.ring.push(chunk.iter().copied());
                         zeroed.ring.push(chunk.iter().copied());
                     }
-                    // Nothing new: the rings run dry into underruns and priming.
                     2 => {}
-                    // A driver handing back garbage.
                     3 => {
                         let junk = [f32::NAN, f32::INFINITY, -1.5, 0.75];
                         let chunk: Vec<f32> = junk.iter().cycle().take(4096).copied().collect();
                         live.ring.push(chunk.iter().copied());
                         zeroed.ring.push(chunk.iter().copied());
                     }
-                    // A second sender joins, then both get fresh audio.
                     4 => {
                         let live_ring = Arc::new(SampleRing::new(48_000, 2, 0));
                         let zeroed_ring = Arc::new(SampleRing::new(48_000, 2, 0));
-                        live.mixer.add(2, live_ring.clone());
-                        zeroed.mixer.add(2, zeroed_ring.clone());
+                        live.mixer.add_with_user(2, None, live_ring.clone());
+                        zeroed.mixer.add_with_user(2, None, zeroed_ring.clone());
                         let chunk: Vec<f32> = (0..8192).map(|_| noise.next() * 0.4).collect();
                         live.ring.push(chunk.iter().copied());
                         zeroed.ring.push(chunk.iter().copied());
                         live_ring.push(chunk.iter().rev().copied());
                         zeroed_ring.push(chunk.iter().rev().copied());
                     }
-                    // Everyone leaves; the queues are empty.
                     5 => {
                         live.ring.clear();
                         zeroed.ring.clear();
@@ -510,9 +573,6 @@ pub(super) mod tests {
         rig.playback.render(&mut loud);
         assert!(loud.iter().any(|sample| *sample > 0.5));
 
-        // The queue empties and the callback shrinks: only the resampler's
-        // carry-over may sound, then exact silence — never the loud samples
-        // the scratch still holds past its new length.
         rig.ring.clear();
         let mut quiet = [0f32; 1024];
         rig.playback.render(&mut quiet);
@@ -524,14 +584,10 @@ pub(super) mod tests {
             &quiet[4..20]
         );
 
-        // Growing back over the stale region with nothing queued must stay
-        // silent too.
         let mut grown = [0f32; 8192];
         rig.playback.render(&mut grown);
         assert!(grown.iter().all(|sample| *sample == 0.));
 
-        // And fresh quiet audio over the same region must arrive clean,
-        // without the loud era bleeding through.
         rig.ring.push(std::iter::repeat_n(0.05, 48_000));
         let mut resumed = [0f32; 2048];
         rig.playback.render(&mut resumed);
@@ -544,18 +600,14 @@ pub(super) mod tests {
 
     #[test]
     fn callbacks_stop_allocating_once_buffer_sizes_settle() {
-        // Six source frames per output frame: the deepest scratch and stream
-        // the sizes below can ask for.
         let mut rig = rig(8_000, 2);
         let second = Arc::new(SampleRing::new(48_000, 2, 0));
-        rig.mixer.add(2, second.clone());
+        rig.mixer.add_with_user(2, None, second.clone());
         let mut noise = Noise(99);
         let chunk: Vec<f32> = (0..8192).map(|_| noise.next() * 0.3).collect();
         rig.ring.push(chunk.iter().copied());
         second.push(chunk.iter().rev().copied());
 
-        // Settle the scratch, the stream and both rings at the largest
-        // buffer the window below asks for.
         let mut warm = [0f32; 2048];
         for _ in 0..4 {
             rig.playback.render(&mut warm);

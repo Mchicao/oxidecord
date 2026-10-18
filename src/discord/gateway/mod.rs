@@ -49,6 +49,12 @@ pub struct IncomingMessage {
 
 pub enum GatewayEvent {
     ConnectionStatus(GatewayConnectionStatus),
+    Relationships(Option<Vec<super::relationships::Relationship>>),
+    Relationship(super::relationships::RelationshipEvent),
+    Thread(super::ThreadEvent),
+    PinsUpdate {
+        channel_id: Id<ChannelMarker>,
+    },
     /// A new session is up. Carries the signed-in user, which voice
     /// connections need to identify themselves, and everyone in voice across
     /// its guilds — the whole of it, replacing whatever an earlier session

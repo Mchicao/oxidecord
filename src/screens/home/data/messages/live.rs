@@ -45,6 +45,8 @@ impl HomeScreen {
         engine.set_input_device(self.voice_input_device.clone());
         engine.set_output_device(self.voice_output_device.clone());
         self.voice_engine = Some(engine);
+        self.attach_camera_engine();
+        self.attach_voice_hotkeys(cx);
 
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
@@ -82,12 +84,46 @@ impl HomeScreen {
 
     fn handle_gateway_event(&mut self, event: discord::GatewayEvent, cx: &mut Context<Self>) {
         match event {
+            discord::GatewayEvent::PinsUpdate { channel_id } => {
+                self.on_channel_pins_update(channel_id, cx)
+            }
+            discord::GatewayEvent::Thread(event) => {
+                if let discord::ThreadEvent::Upsert(thread) = &event {
+                    self.remember_thread(thread);
+                }
+                if let discord::ThreadEvent::Delete { thread_id, .. } = &event {
+                    if Some(*thread_id) == self.selected_channel {
+                        if let Some((_, channel)) = self.thread_channels.get_mut(thread_id) {
+                            channel.can_send = false;
+                        }
+                        self.messages_error = Some("This thread has been deleted.".into());
+                    } else {
+                        self.thread_channels.remove(thread_id);
+                    }
+                }
+                self.threads.apply_event(event, cx);
+            }
+            discord::GatewayEvent::Relationships(relationships) => {
+                if let Some(relationships) = relationships {
+                    self.relationships.replace_snapshot(relationships, cx);
+                    self.refresh_relationship_filter(cx);
+                } else {
+                    self.relationships.load(cx);
+                }
+            }
+            discord::GatewayEvent::Relationship(event) => {
+                self.relationships.apply_event(&event, cx);
+                self.refresh_relationship_filter(cx);
+                self.rebuild_inbox_unreads(cx);
+            }
             discord::GatewayEvent::ConnectionStatus(status) => self.set_gateway_status(status, cx),
             discord::GatewayEvent::Ready {
                 user_id,
                 voice_states,
             } => {
                 self.self_user_id = Some(user_id);
+                self.hydrate_peer_audio(user_id.get());
+                self.relationships.reset();
                 // A new session starts out online whatever was picked, and
                 // a resume doesn't come through here, so this covers both
                 // the first connect and each new session, not resumed sessions.
@@ -98,6 +134,7 @@ impl HomeScreen {
                 // The read states follow, whole, and anything kept from an
                 // earlier session could be stale.
                 self.unreads = Default::default();
+                self.inbox_on_ready(user_id, cx);
                 // Likewise the presences, and anyone who went offline in the
                 // meantime won't be among them.
                 self.user_presences.clear();
@@ -114,10 +151,19 @@ impl HomeScreen {
                 let mut changed = false;
                 for (user_id, status) in presences {
                     if self.user_presences.insert(user_id, status) != Some(status) {
-                        changed |= self.dms.iter().any(|dm| dm.recipient_id == Some(user_id));
+                        changed |= self.dms.iter().any(|dm| dm.recipient_id == Some(user_id))
+                            || (self.view == super::super::super::View::DirectMessages
+                                && self.selected_channel.is_none()
+                                && self.relationships.relationships.iter().any(|relationship| {
+                                    relationship.id == user_id && relationship.kind.is_friend()
+                                }));
                     }
                 }
                 if changed {
+                    let query = self.relationships.search_input.read(cx).value().to_string();
+                    self.relationships
+                        .store
+                        .recompute_filtered(&query, &self.user_presences);
                     cx.notify();
                 }
             }
@@ -135,16 +181,21 @@ impl HomeScreen {
                 if incoming.guild_id.is_none() {
                     self.note_dm_activity(incoming.channel_id, incoming.message.id, cx);
                 }
+                self.inbox_on_incoming_message(&incoming, cx);
                 self.stop_typing(incoming.channel_id, incoming.message.author_id, cx);
                 self.handle_incoming_message(incoming, cx)
             }
             discord::GatewayEvent::MessageUpdate(incoming) => {
+                self.inbox_on_message_update(&incoming, cx);
                 self.handle_message_update(incoming, cx)
             }
             discord::GatewayEvent::MessageDelete {
                 channel_id,
                 message_ids,
-            } => self.handle_message_delete(channel_id, &message_ids, cx),
+            } => {
+                self.inbox_on_message_delete(channel_id, &message_ids, cx);
+                self.handle_message_delete(channel_id, &message_ids, cx);
+            }
             discord::GatewayEvent::Typing {
                 channel_id,
                 user_id,
@@ -190,7 +241,7 @@ impl HomeScreen {
                 self.guild_emojis.insert(guild_id, emojis);
             }
             discord::GatewayEvent::ReadStates(states) => {
-                self.unreads.set_read_states(states);
+                self.unreads.set_read_states(states.clone());
                 // Acks made before the session came up are newer than what
                 // it reports, and one sent before it connected never echoes
                 // back — so keep the unsent ones and read the open
@@ -199,6 +250,7 @@ impl HomeScreen {
                     self.unreads.ack(channel_id, message_id);
                 }
                 self.ack_open_conversation(cx);
+                self.inbox_on_read_states(&states, cx);
                 cx.notify();
             }
             discord::GatewayEvent::MessageAck {
@@ -211,18 +263,22 @@ impl HomeScreen {
                 } else {
                     self.unreads.ack(channel_id, message_id);
                 }
+                self.inbox_on_message_ack(channel_id, message_id, manual, cx);
                 cx.notify();
             }
             discord::GatewayEvent::GuildUnreads(guild) => {
-                self.unreads.set_guild(guild);
+                self.unreads.set_guild(guild.clone());
+                self.inbox_on_guild_unreads(&guild, cx);
                 cx.notify();
             }
             discord::GatewayEvent::LatestMessages(channels) => {
-                self.unreads.set_latest(channels);
+                self.unreads.set_latest(channels.clone());
+                self.inbox_on_latest_messages(&channels, cx);
                 cx.notify();
             }
             discord::GatewayEvent::MuteSettings(settings) => {
-                self.unreads.set_mutes(settings);
+                self.unreads.set_mutes(settings.clone());
+                self.inbox_on_mute_settings(&settings, cx);
                 cx.notify();
             }
             discord::GatewayEvent::MemberList(update) => {

@@ -4,9 +4,12 @@
 //! capture and video decoders.
 
 pub mod audio;
+pub mod camera;
 pub mod capture;
 pub mod h264;
 pub mod http;
+pub mod loopback;
+pub mod notifications;
 pub mod prefs;
 pub(crate) mod ptt;
 pub mod runtime;

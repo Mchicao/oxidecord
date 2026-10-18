@@ -30,12 +30,86 @@ pub(super) fn dispatch(
 ) -> Vec<GatewayEvent> {
     let data = data.get();
     match name {
+        "CHANNEL_PINS_UPDATE" => serde_json::from_str::<PinsUpdatePayload>(data)
+            .map(|payload| {
+                vec![GatewayEvent::PinsUpdate {
+                    channel_id: payload.channel_id,
+                }]
+            })
+            .unwrap_or_default(),
+        "THREAD_CREATE" | "THREAD_UPDATE" => serde_json::from_str(data)
+            .ok()
+            .and_then(|channel| crate::discord::model::threads::convert_thread(channel, None))
+            .map(|thread| {
+                vec![GatewayEvent::Thread(crate::discord::ThreadEvent::Upsert(
+                    thread,
+                ))]
+            })
+            .unwrap_or_default(),
+        "THREAD_DELETE" => serde_json::from_str::<ThreadDeletePayload>(data)
+            .map(|payload| {
+                vec![GatewayEvent::Thread(crate::discord::ThreadEvent::Delete {
+                    guild_id: payload.guild_id,
+                    thread_id: payload.id,
+                    parent_id: payload.parent_id,
+                })]
+            })
+            .unwrap_or_default(),
+        "THREAD_LIST_SYNC" => serde_json::from_str::<ThreadSyncPayload>(data)
+            .map(|payload| {
+                let joined = crate::discord::model::threads::joined_thread_ids(&payload.members);
+                vec![GatewayEvent::Thread(crate::discord::ThreadEvent::Sync {
+                    guild_id: payload.guild_id,
+                    parent_ids: payload.channel_ids,
+                    threads: payload
+                        .threads
+                        .into_iter()
+                        .filter_map(|channel| {
+                            let member = joined.contains(&channel.id);
+                            crate::discord::model::threads::convert_thread(channel, Some(member))
+                        })
+                        .collect(),
+                })]
+            })
+            .unwrap_or_default(),
+        "THREAD_MEMBERS_UPDATE" => serde_json::from_str::<ThreadMembersPayload>(data)
+            .map(|payload| {
+                let joined = self_id.and_then(|id| {
+                    if payload
+                        .added_members
+                        .iter()
+                        .any(|member| member.user_id == Some(id))
+                    {
+                        Some(true)
+                    } else if payload.removed_member_ids.contains(&id) {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                });
+                vec![GatewayEvent::Thread(
+                    crate::discord::ThreadEvent::Membership {
+                        guild_id: payload.guild_id,
+                        thread_id: payload.id,
+                        member_count: payload.member_count,
+                        joined,
+                    },
+                )]
+            })
+            .unwrap_or_default(),
         "READY" => serde_json::from_str::<ReadyPayload>(data)
             .map(|ready| {
                 *self_id = Some(ready.user.id);
                 let mut voice_states = Vec::new();
                 let mut roles = Vec::new();
                 let mut unreads = vec![
+                    GatewayEvent::Relationships(ready.relationships.and_then(|relationships| {
+                        relationships
+                            .into_iter()
+                            .map(|raw| serde_json::from_str(raw.get()))
+                            .collect::<Result<Vec<_>, _>>()
+                            .ok()
+                    })),
                     GatewayEvent::ReadStates(convert_read_states(ready.read_state)),
                     GatewayEvent::MuteSettings(
                         ready
@@ -88,6 +162,20 @@ pub(super) fn dispatch(
                     .chain(std::iter::once(presences))
                     .chain(roles)
                     .collect()
+            })
+            .unwrap_or_default(),
+        "RELATIONSHIP_ADD" => serde_json::from_str(data)
+            .map(|relationship| {
+                vec![GatewayEvent::Relationship(
+                    crate::discord::relationships::RelationshipEvent::Add(relationship),
+                )]
+            })
+            .unwrap_or_default(),
+        "RELATIONSHIP_REMOVE" => serde_json::from_str(data)
+            .map(|relationship| {
+                vec![GatewayEvent::Relationship(
+                    crate::discord::relationships::RelationshipEvent::Remove(relationship),
+                )]
             })
             .unwrap_or_default(),
         "MESSAGE_CREATE" => serde_json::from_str::<twilight_model::channel::Message>(data)

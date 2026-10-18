@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 const GIVE_UP: Duration = Duration::from_millis(300);
 
 /// Packets held at most. A gap this far behind is never closing.
-const MAX_HELD: usize = 4096;
+const MAX_HELD: usize = 1024;
 
 /// Lost packets reported in one NACK. A burst longer than this is better
 /// recovered from with a keyframe than packet by packet.
@@ -35,6 +35,7 @@ pub(super) struct Frame {
     pub data: Vec<u8>,
     /// Decodable on its own: it carries an IDR slice or parameter sets.
     pub keyframe: bool,
+    pub timestamp: u32,
 }
 
 /// What came of the packets so far.
@@ -66,9 +67,16 @@ pub(super) struct Assembler {
     next: Option<u64>,
     /// Packets already asked for, so a gap isn't reported on every pass.
     nacked: BTreeSet<u64>,
+    lost: bool,
 }
 
 impl Assembler {
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        self.packets
+            .values()
+            .map(|packet| packet.arrived + GIVE_UP + Duration::from_millis(1))
+            .min()
+    }
     pub(super) fn insert(
         &mut self,
         sequence: u16,
@@ -82,8 +90,16 @@ impl Assembler {
             // A duplicate, or a resend that came too late.
             return;
         }
-        if self.packets.len() >= MAX_HELD {
+        if payload.len() > 1500
+            || self.packets.len() >= MAX_HELD
+            || self
+                .next
+                .is_some_and(|next| id.saturating_sub(next) > MAX_HELD as u64)
+        {
             self.resync();
+            if payload.len() > 1500 {
+                return;
+            }
         }
 
         self.packets.insert(
@@ -105,13 +121,26 @@ impl Assembler {
 
     /// Takes every frame that's complete, and says what's missing.
     pub(super) fn assemble(&mut self, now: Instant) -> Assembled {
-        let mut out = Assembled::default();
+        let mut out = Assembled {
+            lost: std::mem::take(&mut self.lost),
+            ..Default::default()
+        };
+        if self.next.is_none()
+            && self
+                .packets
+                .values()
+                .any(|packet| now.duration_since(packet.arrived) > GIVE_UP)
+        {
+            self.resync();
+            out.lost = true;
+        }
         while let Some(next) = self.next {
             if let Some(end) = self.complete_from(next) {
                 let packets: Vec<Packet> = (next..=end)
                     .filter_map(|id| self.packets.remove(&id))
                     .collect();
-                if let Some(frame) = depacketize(packets.iter().map(|p| p.payload.as_slice())) {
+                if let Some(mut frame) = depacketize(packets.iter().map(|p| p.payload.as_slice())) {
+                    frame.timestamp = packets.first().map_or(0, |packet| packet.timestamp);
                     out.frames.push(frame);
                 }
                 self.next = Some(end + 1);
@@ -123,7 +152,10 @@ impl Assembler {
             let Some((&after, packet)) = self.packets.range(next..).next() else {
                 break;
             };
-            if after != next || self.missing_from(next).is_some() {
+            if after != next
+                || self.missing_from(next).is_some()
+                || now.duration_since(packet.arrived) > GIVE_UP
+            {
                 // The oldest packet waiting behind the gap dates it.
                 if now.duration_since(packet.arrived) > GIVE_UP {
                     self.skip_gap(next);
@@ -202,6 +234,7 @@ impl Assembler {
         self.packets.clear();
         self.nacked.clear();
         self.next = None;
+        self.lost = true;
     }
 
     /// Places a sixteen-bit sequence number on a line that doesn't wrap,
@@ -266,7 +299,11 @@ fn depacketize<'a>(payloads: impl Iterator<Item = &'a [u8]>) -> Option<Frame> {
         }
     }
 
-    (!data.is_empty()).then_some(Frame { data, keyframe })
+    (!data.is_empty()).then_some(Frame {
+        data,
+        keyframe,
+        timestamp: 0,
+    })
 }
 
 #[cfg(test)]
@@ -354,5 +391,46 @@ mod tests {
                 0, 0, 0, 1, 0x67, 9, 0, 0, 0, 1, 0x68, 8, 0, 0, 0, 1, 0x65, 1, 2, 3
             ]
         );
+    }
+
+    #[test]
+    fn abandoned_partial_frames_release_the_deadline_instead_of_spinning() {
+        let now = Instant::now();
+        let mut assembler = Assembler::default();
+        feed(&mut assembler, &[(1, 0, false, &[0x41])], now);
+        assert!(assembler.deadline().is_some());
+        assert!(assembler.assemble(now + GIVE_UP * 2).lost);
+        assert!(assembler.deadline().is_none());
+        feed(
+            &mut assembler,
+            &[(2, 1, true, &[0x41]), (3, 2, false, &[0x41])],
+            now,
+        );
+        assert!(assembler.assemble(now + GIVE_UP * 2).lost);
+        assert!(assembler.deadline().is_none());
+    }
+
+    #[test]
+    fn overload_drops_old_frames_and_recovers_at_the_next_boundary() {
+        let now = Instant::now();
+        let mut assembler = Assembler::default();
+        feed(
+            &mut assembler,
+            &[(0, 0, true, &[0x41]), (2, 1, false, &[0x41])],
+            now,
+        );
+        for sequence in 3..=MAX_HELD as u16 + 3 {
+            assembler.insert(sequence, 1, false, vec![0x41], now);
+        }
+        assert!(assembler.assemble(now).lost);
+        feed(
+            &mut assembler,
+            &[(2000, 2, true, &[0x41]), (2001, 3, true, &[0x65, 7])],
+            now,
+        );
+        let out = assembler.assemble(now);
+        assert_eq!(out.frames.len(), 1);
+        assert!(out.frames[0].keyframe);
+        assert_eq!(out.frames[0].data, [0, 0, 0, 1, 0x65, 7]);
     }
 }

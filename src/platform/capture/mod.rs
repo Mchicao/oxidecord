@@ -18,15 +18,18 @@
 #[cfg_attr(windows, path = "windows/mod.rs")]
 #[cfg_attr(not(windows), path = "unsupported.rs")]
 mod backend;
+pub mod clock;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use futures::channel::mpsc::UnboundedSender;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use tokio::sync::mpsc::Sender;
 
 pub use backend::CaptureSource;
+#[cfg(windows)]
+pub(crate) use backend::{MediaFoundation, Nv12Encoder, qpc_hns};
 
 #[derive(Clone, Copy)]
 pub struct CaptureSettings {
@@ -101,6 +104,7 @@ pub enum CaptureEvent {
 struct Control {
     stopped: AtomicBool,
     keyframe: AtomicBool,
+    wake: std::sync::mpsc::SyncSender<()>,
 }
 
 impl Control {
@@ -143,29 +147,42 @@ pub struct ScreenCapture {
 impl ScreenCapture {
     /// Starts capturing `source` on a thread of its own. Events are delivered
     /// on `events` until the capture stops or the receiver is dropped.
-    pub fn start(
+    pub fn start_with_clock(
         source: CaptureSource,
         settings: CaptureSettings,
-        events: UnboundedSender<CaptureEvent>,
+        events: Sender<CaptureEvent>,
+        clock: clock::MediaClock,
     ) -> Self {
+        let (wake, awakened) = std::sync::mpsc::sync_channel(1);
         let control = Arc::new(Control {
             stopped: AtomicBool::new(false),
             keyframe: AtomicBool::new(false),
+            wake,
         });
 
         let thread_control = control.clone();
+        let errors = events.clone();
         let spawned = std::thread::Builder::new()
             .name("screen-capture".into())
             .spawn(move || {
-                let event = match backend::capture(source, settings, &thread_control, &events) {
+                let event = match backend::capture(
+                    source,
+                    settings,
+                    &thread_control,
+                    &events,
+                    awakened,
+                    clock,
+                ) {
                     Ok(()) if thread_control.is_stopped() => return,
                     Ok(()) => CaptureEvent::SourceClosed,
                     Err(err) => CaptureEvent::Failed(err),
                 };
-                let _ = events.unbounded_send(event);
+                let _ = events.blocking_send(event);
             });
         if let Err(err) = spawned {
-            eprintln!("couldn't start the capture thread: {err}");
+            let _ = errors.try_send(CaptureEvent::Failed(format!(
+                "Couldn't start the capture thread: {err}"
+            )));
         }
 
         Self { control }
@@ -175,6 +192,7 @@ impl ScreenCapture {
     /// joined or lost too much to recover from.
     pub fn request_keyframe(&self) {
         self.control.keyframe.store(true, Ordering::Release);
+        let _ = self.control.wake.try_send(());
     }
 }
 
@@ -183,5 +201,6 @@ impl Drop for ScreenCapture {
         // Not joined: the thread notices within a frame and tears down on its
         // own, and the caller is an async task that mustn't block on it.
         self.control.stopped.store(true, Ordering::Release);
+        let _ = self.control.wake.try_send(());
     }
 }

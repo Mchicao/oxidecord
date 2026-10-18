@@ -28,6 +28,11 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_message_target = None;
+        self.refresh_relationship_filter(cx);
+        if !self.relationships.loaded && !self.relationships.loading {
+            self.relationships.load(cx);
+        }
         if self.view == View::DirectMessages && self.selected_channel.is_none() {
             return;
         }
@@ -40,6 +45,8 @@ impl HomeScreen {
         // state so the previously viewed channel's messages don't linger.
         self.selected_channel = None;
         self.reset_conversation(None, window, cx);
+        self.sync_thread_parent(window, cx);
+        self.message_tools_selection_changed(cx);
         if record_history {
             self.navigation_history
                 .push(NavigationEntry::DirectMessagesHome);
@@ -60,6 +67,7 @@ impl HomeScreen {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(dms) => {
+                        this.inbox_on_dms_loaded(&dms, cx);
                         this.note_dm_latest(&dms);
                         this.dms = dms;
                         this.dms_loaded = true;
@@ -112,6 +120,7 @@ impl HomeScreen {
                 this.dms_refreshing = false;
                 match result {
                     Ok(dms) => {
+                        this.inbox_on_dms_loaded(&dms, cx);
                         this.note_dm_latest(&dms);
                         this.dms = dms;
                         cx.notify();

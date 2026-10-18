@@ -31,6 +31,17 @@ impl GatewaySender {
         self_mute: bool,
         self_deaf: bool,
     ) {
+        self.update_voice_state_with_video(guild_id, channel_id, self_mute, self_deaf, false);
+    }
+
+    pub fn update_voice_state_with_video(
+        &self,
+        guild_id: Option<Id<GuildMarker>>,
+        channel_id: Option<Id<ChannelMarker>>,
+        self_mute: bool,
+        self_deaf: bool,
+        self_video: bool,
+    ) {
         let payload = serde_json::json!({
             "op": 4,
             "d": {
@@ -38,7 +49,7 @@ impl GatewaySender {
                 "channel_id": channel_id,
                 "self_mute": self_mute,
                 "self_deaf": self_deaf,
-                "self_video": false,
+                "self_video": self_video,
             }
         });
         let _ = self.inner.send(payload.to_string());

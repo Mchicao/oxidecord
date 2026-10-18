@@ -4,6 +4,10 @@
 /// Stroke-based with `currentColor`, so they tint with the text color.
 pub(super) const EXTRA_ICONS: &[(&str, &str)] = &[
     (
+        "icons/pin.svg",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M5 17h14v-2l-4-3V6h1V2H8v4h1v6l-4 3z"/></svg>"#,
+    ),
+    (
         "icons/users.svg",
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>"#,
     ),

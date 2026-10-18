@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 
 use super::processing::{Options, Status};
-use crate::platform::ptt;
+use crate::platform::ptt::{self, Hotkey, HotkeyAction};
+use crate::voice::peer_settings::{PeerAudioRegistry, PeerSetting};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +27,8 @@ pub struct AudioPreferences {
     pub mode: InputMode,
     pub threshold_db: f32,
     pub ptt_key: u16,
+    pub mute_hotkey: Hotkey,
+    pub deafen_hotkey: Hotkey,
 }
 
 impl Default for AudioPreferences {
@@ -36,6 +40,8 @@ impl Default for AudioPreferences {
             mode: InputMode::AlwaysOn,
             threshold_db: -40.,
             ptt_key: 0x77,
+            mute_hotkey: Hotkey::default_mute(),
+            deafen_hotkey: Hotkey::default_deafen(),
         }
     }
 }
@@ -49,6 +55,8 @@ struct StoredPreferences {
     mode: InputMode,
     threshold_db: f32,
     ptt_key: u16,
+    mute_hotkey: Hotkey,
+    deafen_hotkey: Hotkey,
 }
 
 impl Default for StoredPreferences {
@@ -61,6 +69,8 @@ impl Default for StoredPreferences {
             mode: value.mode,
             threshold_db: value.threshold_db,
             ptt_key: value.ptt_key,
+            mute_hotkey: value.mute_hotkey,
+            deafen_hotkey: value.deafen_hotkey,
         }
     }
 }
@@ -76,6 +86,8 @@ impl TryFrom<StoredPreferences> for AudioPreferences {
             mode: value.mode,
             threshold_db: value.threshold_db,
             ptt_key: value.ptt_key,
+            mute_hotkey: value.mute_hotkey,
+            deafen_hotkey: value.deafen_hotkey,
         };
         value.validate()?;
         Ok(value)
@@ -96,6 +108,12 @@ impl AudioPreferences {
         if !ptt::valid_key(self.ptt_key) {
             return Err("Choose a supported push-to-talk key.");
         }
+        ptt::validate_hotkeys_conflict(
+            self.ptt_key,
+            self.mode == InputMode::PushToTalk,
+            &self.mute_hotkey,
+            &self.deafen_hotkey,
+        )?;
         Ok(())
     }
 }
@@ -113,12 +131,14 @@ const KEY_MASK: u64 = 0xff << KEY_SHIFT;
 const GENERATION: u64 = 1 << 17;
 const FLAGS: u64 = GENERATION - 1;
 
+type HotkeyHook = Arc<dyn Fn(HotkeyAction) + Send + Sync>;
+
 pub(crate) struct AudioControl {
     events: Option<futures::channel::mpsc::UnboundedSender<crate::voice::VoiceEvent>>,
     commands: Option<futures::channel::mpsc::UnboundedSender<crate::voice::Command>>,
     transmitting: AtomicU64,
-    state: AtomicU64,
-    session: AtomicU64,
+    pub(super) state: AtomicU64,
+    pub(super) session: AtomicU64,
     pub(super) input_gain: AtomicU32,
     pub(super) output_gain: AtomicU32,
     threshold: AtomicU32,
@@ -128,6 +148,8 @@ pub(crate) struct AudioControl {
     processing_error: Mutex<Option<&'static str>>,
     pub(super) processing_owner: AtomicU64,
     pub(super) active_processing: Mutex<Weak<super::processing::Processing>>,
+    pub(crate) peer_settings: Arc<PeerAudioRegistry>,
+    pub(crate) hotkey_hook: Mutex<Option<HotkeyHook>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -182,6 +204,8 @@ impl AudioControl {
             processing_error: Mutex::new(None),
             processing_owner: AtomicU64::new(0),
             active_processing: Mutex::new(Weak::new()),
+            peer_settings: Arc::new(PeerAudioRegistry::new()),
+            hotkey_hook: Mutex::new(None),
         }
     }
 
@@ -281,6 +305,21 @@ impl AudioControl {
     fn notify(&self) {
         if let Some(events) = &self.events {
             let _ = events.unbounded_send(crate::voice::VoiceEvent::AudioSettingsChanged);
+        }
+    }
+
+    pub(crate) fn trigger_hotkey(&self, action: HotkeyAction) {
+        let hook = self.hotkey_hook.lock().ok().and_then(|guard| guard.clone());
+        if let Some(hook) = hook {
+            hook(action);
+            return;
+        }
+        self.notify();
+    }
+
+    pub fn set_hotkey_hook(&self, hook: impl Fn(HotkeyAction) + Send + Sync + 'static) {
+        if let Ok(mut guard) = self.hotkey_hook.lock() {
+            *guard = Some(Arc::new(hook));
         }
     }
 
@@ -478,6 +517,26 @@ impl AudioSettings {
             .unwrap_or_default()
     }
 
+    pub fn set_peer_volume(&self, user_id: u64, volume: f32) -> Result<(), &'static str> {
+        self.control.peer_settings.set_volume(user_id, volume)
+    }
+
+    pub fn set_peer_muted(&self, user_id: u64, muted: bool) {
+        self.control.peer_settings.set_muted(user_id, muted);
+    }
+
+    pub fn peer_setting(&self, user_id: u64) -> PeerSetting {
+        self.control.peer_settings.get_setting(user_id)
+    }
+
+    pub fn load_peer_settings(&self, settings: &HashMap<u64, PeerSetting>) {
+        self.control.peer_settings.load_settings(settings);
+    }
+
+    pub fn set_hotkey_hook(&self, hook: impl Fn(HotkeyAction) + Send + Sync + 'static) {
+        self.control.set_hotkey_hook(hook);
+    }
+
     pub fn set(&self, preferences: AudioPreferences) -> Result<(), &'static str> {
         preferences.validate()?;
         let mut configuration = self
@@ -486,6 +545,8 @@ impl AudioSettings {
             .map_err(|_| "Audio settings are unavailable.")?;
         let rebind = configuration.preferences.mode != preferences.mode
             || configuration.preferences.ptt_key != preferences.ptt_key
+            || configuration.preferences.mute_hotkey != preferences.mute_hotkey
+            || configuration.preferences.deafen_hotkey != preferences.deafen_hotkey
             || (preferences.mode == InputMode::PushToTalk
                 && self.control.state.load(Ordering::Acquire) & READY == 0);
         if rebind {
@@ -506,12 +567,24 @@ impl AudioSettings {
             return;
         };
         configuration.error = None;
-        if configuration.preferences.mode == InputMode::PushToTalk {
+        let ptt_needed = configuration.preferences.mode == InputMode::PushToTalk;
+        let hotkeys_needed = configuration.preferences.mute_hotkey.enabled
+            || configuration.preferences.deafen_hotkey.enabled;
+
+        if ptt_needed || hotkeys_needed {
             if !configuration.enabled {
-                configuration.error = Some("The voice engine is not running. Reconnect your account to enable background push to talk.".into());
+                if ptt_needed {
+                    configuration.error = Some("The voice engine is not running. Reconnect your account to enable background push to talk.".into());
+                }
                 return;
             }
-            match ptt::Listener::start(self.control.clone(), configuration.preferences.ptt_key) {
+            match ptt::Listener::start_with_hotkeys(
+                self.control.clone(),
+                configuration.preferences.ptt_key,
+                ptt_needed,
+                configuration.preferences.mute_hotkey,
+                configuration.preferences.deafen_hotkey,
+            ) {
                 Ok(listener) => configuration.listener = Some(listener),
                 Err(error) => configuration.error = Some(error),
             }
@@ -629,6 +702,40 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn hotkeys_round_trip_and_conflict_validation() {
+        let settings = AudioSettings::offline(AudioPreferences::default());
+        let mut prefs = settings.preferences();
+
+        // Enable default mute and deafen
+        prefs.mute_hotkey.enabled = true;
+        prefs.deafen_hotkey.enabled = true;
+        assert!(settings.set(prefs.clone()).is_ok());
+
+        // Make mute and deafen conflict
+        prefs.deafen_hotkey.key = prefs.mute_hotkey.key;
+        prefs.deafen_hotkey.modifiers = prefs.mute_hotkey.modifiers;
+        assert!(settings.set(prefs.clone()).is_err());
+    }
+
+    #[test]
+    fn peer_settings_audio_control_and_settings_api() {
+        let settings = AudioSettings::offline(AudioPreferences::default());
+        let user_id = 9988776655u64;
+
+        assert_eq!(settings.peer_setting(user_id), PeerSetting::default());
+
+        assert!(settings.set_peer_volume(user_id, 1.8).is_ok());
+        settings.set_peer_muted(user_id, true);
+
+        let snap = settings.peer_setting(user_id);
+        assert_eq!(snap.volume, 1.8);
+        assert!(snap.muted);
+
+        settings.set_peer_muted(user_id, false);
+        assert!(!settings.peer_setting(user_id).muted);
     }
 
     #[test]

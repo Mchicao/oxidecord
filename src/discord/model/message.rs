@@ -46,6 +46,7 @@ pub struct Message {
     pub forward: Option<ForwardedMessage>,
     /// Reactions on the message, in Discord's order (first reacted first).
     pub reactions: Vec<Reaction>,
+    pub pinned: bool,
     /// Whether the server has the message yet. Only ever not [`Delivery::Sent`]
     /// for one the user just sent, shown before Discord confirms it.
     pub delivery: Delivery,
@@ -100,6 +101,7 @@ impl Message {
             forward: None,
             reactions: Vec::new(),
             delivery: Delivery::Sending { uploads },
+            pinned: false,
         }
     }
 
@@ -357,6 +359,7 @@ pub(in crate::discord) fn convert_message(message: twilight_model::channel::Mess
             })
             .collect(),
         delivery: Delivery::Sent,
+        pinned: message.pinned,
     }
 }
 

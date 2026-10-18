@@ -31,6 +31,17 @@ pub async fn fetch_dms() -> Result<Vec<DirectMessage>, String> {
 /// Joining a DM's voice channel only starts the call; nobody is rung until a
 /// client asks, as Discord's own does right after joining. A user-client
 /// endpoint with no twilight helper. A `null` recipient list rings them all.
+pub async fn fetch_thread(
+    channel_id: Id<ChannelMarker>,
+) -> Result<crate::discord::ThreadSummary, String> {
+    request(move |client| async move {
+        let channel = client.channel(channel_id).await?.model().await?;
+        crate::discord::model::threads::convert_thread(channel, None)
+            .ok_or_else(|| anyhow::anyhow!("That channel is unavailable or is not a thread."))
+    })
+    .await
+}
+
 pub async fn ring_call(channel_id: Id<ChannelMarker>) -> Result<(), String> {
     request(move |client| async move {
         let request = RequestBuilder::raw(Method::Post, format!("channels/{channel_id}/call/ring"))

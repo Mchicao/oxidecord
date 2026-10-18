@@ -58,6 +58,7 @@ pub fn open(
     cx: &mut App,
     cue_settings: CueSettings,
     audio_settings: AudioSettings,
+    notifications: SettingPage,
     on_log_out: impl Fn(&mut Window, &mut App) + 'static,
 ) {
     arm_debug_code(cx);
@@ -102,6 +103,7 @@ pub fn open(
                             .sidebar_style(&StyleRefinement::default().rounded_l(inner_radius))
                             .page(themes_page())
                             .page(voice_page(cue_settings.clone(), audio_settings.clone()))
+                            .page(notifications.clone())
                             .page(updates_page())
                             .when(debug, |this| this.page(gallery::page())),
                     )
@@ -251,6 +253,7 @@ fn voice_page(settings: CueSettings, audio: AudioSettings) -> SettingPage {
                     div().text_sm().text_color(cx.theme().muted_foreground).child(status.ptt_status())
                 })),
         )
+        .group(global_hotkeys(audio.clone()))
         .group(
             SettingGroup::new().title("Sonora audio processing")
                 .item(SettingItem::new("Noise suppression", processing_switch(audio.clone(), ProcessingFeature::Noise))
@@ -297,6 +300,110 @@ enum ProcessingFeature {
     Noise,
     Echo,
     Gain,
+}
+
+fn global_hotkeys(audio: AudioSettings) -> SettingGroup {
+    let mut group = SettingGroup::new().title("Global shortcuts");
+    for (label, mute) in [("Mute shortcut", true), ("Deafen shortcut", false)] {
+        let read = audio.clone();
+        let write = audio.clone();
+        group = group.item(
+            SettingItem::new(
+                label,
+                SettingField::switch(
+                    move |_| {
+                        let value = read.preferences();
+                        if mute {
+                            value.mute_hotkey.enabled
+                        } else {
+                            value.deafen_hotkey.enabled
+                        }
+                    },
+                    move |enabled, cx| {
+                        let mut value = write.preferences();
+                        if mute {
+                            value.mute_hotkey.enabled = enabled;
+                        } else {
+                            value.deafen_hotkey.enabled = enabled;
+                        }
+                        save_audio(&write, value, cx);
+                    },
+                ),
+            )
+            .description(if mute {
+                "Ctrl+Shift+M by default. Works while another application has focus."
+            } else {
+                "Ctrl+Shift+D by default. Works while another application has focus."
+            }),
+        );
+        let read = audio.clone();
+        let write = audio.clone();
+        group = group.item(SettingItem::new(
+            format!("{label} key"),
+            SettingField::dropdown(
+                crate::platform::ptt::keys()
+                    .into_iter()
+                    .filter(|(key, _)| !matches!(key, 0xa0..=0xa5))
+                    .map(|(key, name)| (key.to_string().into(), name.into()))
+                    .collect(),
+                move |_| {
+                    let value = read.preferences();
+                    if mute {
+                        value.mute_hotkey.key
+                    } else {
+                        value.deafen_hotkey.key
+                    }
+                    .to_string()
+                    .into()
+                },
+                move |key, cx| {
+                    if let Ok(key) = key.parse() {
+                        let mut value = write.preferences();
+                        if mute {
+                            value.mute_hotkey.key = key;
+                        } else {
+                            value.deafen_hotkey.key = key;
+                        }
+                        save_audio(&write, value, cx);
+                    }
+                },
+            ),
+        ));
+        for (name, bit) in [("Ctrl", 1u8), ("Shift", 2), ("Alt", 4)] {
+            let read = audio.clone();
+            let write = audio.clone();
+            group = group.item(SettingItem::new(
+                format!("{label}: {name}"),
+                SettingField::switch(
+                    move |_| {
+                        let value = read.preferences();
+                        let hotkey = if mute {
+                            value.mute_hotkey
+                        } else {
+                            value.deafen_hotkey
+                        };
+                        hotkey.modifiers.bits() & bit != 0
+                    },
+                    move |enabled, cx| {
+                        let mut value = write.preferences();
+                        let hotkey = if mute {
+                            &mut value.mute_hotkey
+                        } else {
+                            &mut value.deafen_hotkey
+                        };
+                        let bits = hotkey.modifiers.bits();
+                        hotkey.modifiers = crate::platform::ptt::Modifiers::from_bits(if enabled {
+                            bits | bit
+                        } else {
+                            bits & !bit
+                        });
+                        save_audio(&write, value, cx);
+                    },
+                ),
+            ));
+        }
+    }
+    group
 }
 
 fn processing_switch(settings: AudioSettings, feature: ProcessingFeature) -> SettingField<bool> {
@@ -359,9 +466,18 @@ fn audio_number(settings: AudioSettings, field: AudioNumber) -> SettingField<Sha
 }
 
 fn save_audio(settings: &AudioSettings, value: crate::voice::AudioPreferences, cx: &mut App) {
-    if settings.set(value.clone()).is_ok() {
-        prefs::update(|prefs| prefs.audio = value);
-        cx.refresh_windows();
+    match settings.set(value.clone()) {
+        Ok(()) => {
+            prefs::update(|prefs| prefs.audio = value);
+            cx.refresh_windows();
+        }
+        Err(error) => {
+            for window in cx.windows() {
+                let _ = window.update(cx, |_, window, cx| {
+                    window.push_notification(error.to_owned(), cx)
+                });
+            }
+        }
     }
 }
 

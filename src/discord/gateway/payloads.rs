@@ -15,6 +15,40 @@ use crate::discord::model::{
     RawReadState, RawRole, RawVoiceState, versioned_list,
 };
 
+#[derive(Deserialize)]
+pub(super) struct ThreadDeletePayload {
+    pub guild_id: Id<GuildMarker>,
+    pub id: Id<ChannelMarker>,
+    pub parent_id: Id<ChannelMarker>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PinsUpdatePayload {
+    pub channel_id: Id<ChannelMarker>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ThreadSyncPayload {
+    pub guild_id: Id<GuildMarker>,
+    #[serde(default)]
+    pub channel_ids: Vec<Id<ChannelMarker>>,
+    #[serde(default)]
+    pub threads: Vec<twilight_model::channel::Channel>,
+    #[serde(default)]
+    pub members: Vec<twilight_model::channel::thread::ThreadMember>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ThreadMembersPayload {
+    pub guild_id: Id<GuildMarker>,
+    pub id: Id<ChannelMarker>,
+    pub member_count: Option<i32>,
+    #[serde(default)]
+    pub added_members: Vec<twilight_model::channel::thread::ThreadMember>,
+    #[serde(default)]
+    pub removed_member_ids: Vec<Id<UserMarker>>,
+}
+
 /// `STREAM_CREATE`, of which only what a connection needs is read.
 #[derive(Deserialize)]
 pub(super) struct StreamCreatePayload {
@@ -47,6 +81,8 @@ pub(super) struct SettingsProtoUpdate {
 #[derive(Deserialize)]
 pub(super) struct ReadyPayload {
     pub(super) user: ReadyUser,
+    #[serde(default)]
+    pub(super) relationships: Option<Vec<Box<RawValue>>>,
     /// A user session's guilds arrive whole in `READY`; a bot's only as ids,
     /// with the rest following in `GUILD_CREATE`.
     #[serde(default)]

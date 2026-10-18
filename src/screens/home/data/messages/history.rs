@@ -9,7 +9,7 @@ use twilight_model::id::{
 
 use crate::discord::{self, MessagePage};
 use crate::screens::home::navigation::NavigationEntry;
-use crate::screens::home::{HomeScreen, NavigateBack, NavigateForward, View};
+use crate::screens::home::{HomeScreen, MessageTarget, NavigateBack, NavigateForward, View};
 
 impl HomeScreen {
     pub(in crate::screens::home) fn select_channel(
@@ -18,7 +18,34 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_message_target = None;
         self.apply_channel_selection(channel_id, true, window, cx);
+    }
+
+    pub(in crate::screens::home) fn jump_to_message(
+        &mut self,
+        target: MessageTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target.guild_id {
+            Some(guild_id) => {
+                self.pending_message_target = Some(target);
+                self.open_guild_channel(guild_id, Some(target.channel_id), true, window, cx);
+            }
+            None => {
+                if self.view != View::DirectMessages {
+                    self.apply_direct_messages_home(true, window, cx);
+                }
+                self.pending_message_target = Some(target);
+                self.apply_channel_selection(target.channel_id, true, window, cx);
+            }
+        }
+        if self.selected_channel == Some(target.channel_id)
+            && self.pending_message_target == Some(target)
+        {
+            self.load_messages(window, cx);
+        }
     }
 
     /// Selects `channel_id` in the active view and loads its messages. When
@@ -32,11 +59,24 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.view == View::Guild
+            && let Some(thread) = self.threads.get(channel_id).cloned()
+        {
+            self.remember_thread(&thread);
+        }
         if self.selected_channel == Some(channel_id) {
             return;
         }
         self.save_collapsed_categories();
         self.selected_channel = Some(channel_id);
+        if self
+            .channel_info(channel_id)
+            .is_some_and(|channel| channel.kind.is_thread())
+        {
+            self.threads_open = false;
+        }
+        self.sync_thread_parent(window, cx);
+        self.message_tools_selection_changed(cx);
         let entry = match self.view {
             View::DirectMessages => Some(NavigationEntry::DirectMessage { channel_id }),
             View::Guild => self
@@ -101,6 +141,7 @@ impl HomeScreen {
         let selected_guild = self.selected_guild;
         let channels_loading = self.channels_loading;
         let channel_groups = &self.channel_groups;
+        let thread_channels = &self.thread_channels;
         let dms_loaded = self.dms_loaded;
         let dms = &self.dms;
 
@@ -119,7 +160,10 @@ impl HomeScreen {
                         || channel_groups
                             .iter()
                             .flat_map(|group| &group.channels)
-                            .any(|channel| channel.id == channel_id && !channel.kind.is_voice()))
+                            .any(|channel| channel.id == channel_id && !channel.kind.is_voice())
+                        || thread_channels
+                            .get(&channel_id)
+                            .is_some_and(|(guild, _)| *guild == guild_id))
             }
         };
 
@@ -136,6 +180,7 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_message_target = None;
         match entry {
             NavigationEntry::DirectMessagesHome => {
                 self.apply_direct_messages_home(false, window, cx);
@@ -164,6 +209,13 @@ impl HomeScreen {
         let Some(channel_id) = self.selected_channel else {
             return;
         };
+        let target = self.pending_message_target.take().filter(|target| {
+            target.channel_id == channel_id
+                && match self.view {
+                    View::DirectMessages => target.guild_id.is_none(),
+                    View::Guild => target.guild_id == self.selected_guild,
+                }
+        });
         let placeholder = match self.view {
             View::DirectMessages => self
                 .selected_dm_info()
@@ -179,9 +231,21 @@ impl HomeScreen {
             .then(|| self.unreads.acked(channel_id))
             .flatten();
         self.reset_conversation(placeholder, window, cx);
+        if self.view == View::Guild
+            && self
+                .selected_channel_info()
+                .is_some_and(|channel| channel.kind == discord::ChannelKind::Forum)
+        {
+            cx.notify();
+            return;
+        }
         self.unread_marker = marker;
         self.messages_loading = true;
-        self.fetch_opening_page(channel_id, marker, window, cx);
+        if let Some(target) = target {
+            self.fetch_message_target(target, window, cx);
+        } else {
+            self.fetch_opening_page(channel_id, marker, window, cx);
+        }
     }
 
     /// Leaves history opened further back for the newest page, as Discord's
@@ -197,6 +261,8 @@ impl HomeScreen {
         if self.messages_loading {
             return;
         }
+        self.message_load_generation = self.message_load_generation.wrapping_add(1);
+        self.highlighted_message = None;
         self.messages.clear();
         self.messages_list.reset(0);
         self.reactors.clear();
@@ -220,6 +286,7 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let generation = self.message_load_generation;
         cx.spawn_in(window, async move |this, cx| {
             let page_size = discord::MESSAGE_PAGE_SIZE;
             let mut result = discord::fetch_messages(channel_id, MessagePage::Latest)
@@ -236,7 +303,9 @@ impl HomeScreen {
             let _ = this.update_in(cx, |this, window, cx| {
                 // The user may have clicked another channel while this request
                 // was in flight; drop the stale response.
-                if this.selected_channel != Some(channel_id) {
+                if this.selected_channel != Some(channel_id)
+                    || this.message_load_generation != generation
+                {
                     return;
                 }
                 this.messages_loading = false;
@@ -269,6 +338,57 @@ impl HomeScreen {
         .detach();
     }
 
+    fn fetch_message_target(
+        &mut self,
+        target: MessageTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.message_load_generation;
+        cx.spawn_in(window, async move |this, cx| {
+            let result =
+                discord::fetch_messages(target.channel_id, MessagePage::Around(target.message_id))
+                    .await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                if this.selected_channel != Some(target.channel_id)
+                    || this.message_load_generation != generation
+                {
+                    return;
+                }
+                this.messages_loading = false;
+                match result {
+                    Ok(messages) => {
+                        if let Some(index) = messages
+                            .iter()
+                            .position(|message| message.id == target.message_id)
+                        {
+                            let complete = messages.len() < discord::MESSAGE_PAGE_SIZE;
+                            this.reached_oldest = complete;
+                            this.reached_newest = complete;
+                            this.messages = messages;
+                            this.request_author_members();
+                            this.messages_list.reset(this.messages.len());
+                            this.messages_list.scroll_to(ListOffset {
+                                item_ix: index,
+                                offset_in_item: px(0.),
+                            });
+                            this.highlighted_message = Some(target.message_id);
+                            this.at_bottom = false;
+                        } else {
+                            this.messages_error = Some(
+                                "That message is unavailable, or you cannot read its history."
+                                    .into(),
+                            );
+                        }
+                    }
+                    Err(error) => this.messages_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Puts the first unread message at the top of the view.
     ///
     /// The list stops short of scrolling past its end, so when the unread
@@ -289,9 +409,13 @@ impl HomeScreen {
         self.at_bottom = false;
 
         let screen = cx.entity().downgrade();
+        let generation = self.message_load_generation;
         window.on_next_frame(move |window, _| {
             window.on_next_frame(move |_, cx| {
                 let _ = screen.update(cx, |this, cx| {
+                    if this.message_load_generation != generation {
+                        return;
+                    }
                     let list = &this.messages_list;
                     // Pinned to the bottom, the list reports its top as past
                     // the last item.
@@ -312,6 +436,8 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.message_load_generation = self.message_load_generation.wrapping_add(1);
+        self.highlighted_message = None;
         self.messages.clear();
         self.messages_list.reset(0);
         self.reactors.clear();
@@ -357,6 +483,7 @@ impl HomeScreen {
             return;
         };
         self.older_loading = true;
+        let generation = self.message_load_generation;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -365,6 +492,7 @@ impl HomeScreen {
                 // Drop the response if the channel changed or the messages
                 // were reloaded while this request was in flight.
                 if this.selected_channel != Some(channel_id)
+                    || this.message_load_generation != generation
                     || this.messages.first().map(|message| message.id) != Some(oldest_id)
                 {
                     return;
@@ -407,12 +535,14 @@ impl HomeScreen {
             return;
         };
         self.newer_loading = true;
+        let generation = self.message_load_generation;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             let result = discord::fetch_messages(channel_id, MessagePage::After(newest_id)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.selected_channel != Some(channel_id)
+                    || this.message_load_generation != generation
                     || this.messages.last().map(|message| message.id) != Some(newest_id)
                 {
                     return;

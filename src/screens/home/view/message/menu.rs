@@ -20,6 +20,8 @@ pub(super) struct MessageMenu {
     pub can_edit: bool,
     pub can_delete: bool,
     pub has_reactions: bool,
+    pub pin: Option<crate::screens::home::message_tools::PinMenuAction>,
+    pub can_create_thread: bool,
 }
 
 impl MessageMenu {
@@ -38,6 +40,13 @@ impl MessageMenu {
                     .is_none_or(|editing| editing.message_id != message.id),
             can_delete: screen.can_delete_message(message),
             has_reactions: !message.reactions.is_empty(),
+            pin: screen.pin_menu_action(message),
+            can_create_thread: screen.selected_channel_info().is_some_and(|channel| {
+                !channel.kind.is_thread()
+                    && channel
+                        .permissions
+                        .contains(discord::Permissions::CREATE_PUBLIC_THREADS)
+            }),
         }
     }
 
@@ -126,6 +135,36 @@ impl MessageMenu {
                         this.copy_message_link(message_id, cx)
                     })),
             );
+        let menu = menu
+            .when_some(self.pin, |menu, pin| {
+                menu.item(
+                    PopupMenuItem::new(
+                        if pin == crate::screens::home::message_tools::PinMenuAction::Pin {
+                            "Pin Message"
+                        } else {
+                            "Unpin Message"
+                        },
+                    )
+                    .icon(Icon::default().path("icons/pin.svg"))
+                    .on_click(action(|this, id, window, cx| {
+                        this.toggle_pin_message(id, window, cx)
+                    })),
+                )
+            })
+            .when(self.can_create_thread, |menu| {
+                menu.item(
+                    PopupMenuItem::new("Create Thread")
+                        .icon(Icon::default().path("icons/messages-square.svg"))
+                        .on_click(action(|this, id, window, cx| {
+                            this.threads_open = true;
+                            this.sync_thread_parent(window, cx);
+                            if let Some(channel) = this.selected_channel {
+                                this.threads
+                                    .begin_create_from_message(channel, id, window, cx);
+                            }
+                        })),
+                )
+            });
         if !self.can_delete {
             return menu;
         }

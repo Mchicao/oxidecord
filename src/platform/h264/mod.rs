@@ -64,7 +64,7 @@ impl Control {
     /// Whether another picture may be sent, reserving a slot when it may.
     fn reserve_frame(&self) -> bool {
         self.frames_in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
                 (in_flight < MAX_FRAMES_IN_FLIGHT).then_some(in_flight + 1)
             })
             .is_ok()
@@ -74,17 +74,33 @@ impl Control {
 /// The UI's half: where pictures are drawn, and when they've been.
 pub struct LiveDecoder {
     control: Arc<Control>,
+    wake: mpsc::SyncSender<Vec<u8>>,
 }
 
 /// The connection's half: where access units go in.
 pub struct DecoderInput {
-    frames: mpsc::Sender<Vec<u8>>,
+    frames: mpsc::SyncSender<Vec<u8>>,
+    control: Arc<Control>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeStatus {
+    Queued,
+    Busy,
+    Closed,
 }
 
 impl DecoderInput {
     /// Queues one access unit. Returns false once the decoder has stopped.
-    pub fn decode(&self, frame: Vec<u8>) -> bool {
-        self.frames.send(frame).is_ok()
+    pub fn try_decode(&self, frame: Vec<u8>) -> DecodeStatus {
+        if self.control.is_stopped() {
+            return DecodeStatus::Closed;
+        }
+        match self.frames.try_send(frame) {
+            Ok(()) => DecodeStatus::Queued,
+            Err(mpsc::TrySendError::Full(_)) => DecodeStatus::Busy,
+            Err(mpsc::TrySendError::Disconnected(_)) => DecodeStatus::Closed,
+        }
     }
 }
 
@@ -94,14 +110,11 @@ pub fn start(
     target: (u32, u32),
     events: UnboundedSender<DecoderEvent>,
 ) -> (LiveDecoder, DecoderInput) {
-    let control = Arc::new(Control {
-        stopped: AtomicBool::new(false),
-        frames_in_flight: AtomicUsize::new(0),
-        target: AtomicU64::new(pack(target)),
-    });
-    let (frames, input) = mpsc::channel();
+    let (decoder, sender, input) = channel(target);
+    let control = decoder.control.clone();
 
     let thread_control = control.clone();
+    let errors = events.clone();
     let spawned = std::thread::Builder::new()
         .name("stream-decode".into())
         .spawn(move || {
@@ -113,10 +126,30 @@ pub fn start(
             }
         });
     if let Err(err) = spawned {
-        eprintln!("couldn't start the stream decoder: {err}");
+        control.stopped.store(true, Ordering::Release);
+        let _ = errors.unbounded_send(DecoderEvent::Failed(format!(
+            "Couldn't start the stream decoder: {err}"
+        )));
     }
 
-    (LiveDecoder { control }, DecoderInput { frames })
+    (decoder, sender)
+}
+
+fn channel(target: (u32, u32)) -> (LiveDecoder, DecoderInput, mpsc::Receiver<Vec<u8>>) {
+    let control = Arc::new(Control {
+        stopped: AtomicBool::new(false),
+        frames_in_flight: AtomicUsize::new(0),
+        target: AtomicU64::new(pack(target)),
+    });
+    let (frames, input) = mpsc::sync_channel(2);
+    (
+        LiveDecoder {
+            control: control.clone(),
+            wake: frames.clone(),
+        },
+        DecoderInput { frames, control },
+        input,
+    )
 }
 
 impl LiveDecoder {
@@ -127,7 +160,7 @@ impl LiveDecoder {
 
     /// Reports that a picture has been drawn and released, freeing a slot.
     pub fn frame_consumed(&self) {
-        let _ = self.control.frames_in_flight.fetch_update(
+        let _ = self.control.frames_in_flight.try_update(
             Ordering::AcqRel,
             Ordering::Acquire,
             |in_flight| in_flight.checked_sub(1),
@@ -138,6 +171,40 @@ impl LiveDecoder {
 impl Drop for LiveDecoder {
     fn drop(&mut self) {
         self.control.stopped.store(true, Ordering::Release);
+        let _ = self.wake.try_send(Vec::new());
+    }
+}
+
+impl Drop for DecoderInput {
+    fn drop(&mut self) {
+        self.control.stopped.store(true, Ordering::Release);
+        let _ = self.frames.try_send(Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn input_is_bounded_and_drop_wakes_receiver_with_input_retained() {
+        let (decoder, input, receiver) = channel((320, 180));
+        assert_eq!(input.try_decode(vec![1]), DecodeStatus::Queued);
+        assert_eq!(input.try_decode(vec![2]), DecodeStatus::Queued);
+        assert_eq!(input.try_decode(vec![3]), DecodeStatus::Busy);
+        assert_eq!(receiver.recv().unwrap(), [1]);
+        assert_eq!(receiver.recv().unwrap(), [2]);
+        let (done, waited) = mpsc::sync_channel(1);
+        let control = decoder.control.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = receiver.recv();
+            done.send(control.is_stopped()).unwrap();
+        });
+        drop(decoder);
+        assert!(waited.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert_eq!(input.try_decode(vec![4]), DecodeStatus::Closed);
+        worker.join().unwrap();
     }
 }
 

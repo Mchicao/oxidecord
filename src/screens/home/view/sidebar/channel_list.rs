@@ -115,7 +115,7 @@ impl HomeScreen {
                     px(20.),
                 );
 
-                h_flex()
+                let row = h_flex()
                     .id(("voice-member", participant.user_id.get()))
                     .pl(px(28.))
                     .pr_2()
@@ -158,7 +158,14 @@ impl HomeScreen {
                                 .size_3()
                                 .text_color(theme.danger),
                         )
-                    })
+                    });
+                crate::screens::home::peer_audio::attach_peer_audio_context_menu(
+                    row,
+                    participant.user_id.get(),
+                    participant.name.clone(),
+                    participant.is_self,
+                    cx,
+                )
             })
             .collect()
     }

@@ -60,7 +60,10 @@ pub(in crate::screens::home) fn build_channel_groups(channels: Vec<Channel>) -> 
 
 pub(in crate::screens::home) fn channel_icon_path(kind: ChannelKind) -> &'static str {
     match kind {
-        ChannelKind::Text => "icons/hash.svg",
+        ChannelKind::Text
+        | ChannelKind::PublicThread
+        | ChannelKind::PrivateThread
+        | ChannelKind::AnnouncementThread => "icons/hash.svg",
         ChannelKind::Announcement => "icons/megaphone.svg",
         ChannelKind::Voice | ChannelKind::Stage => "icons/volume-2.svg",
         ChannelKind::Forum => "icons/messages-square.svg",

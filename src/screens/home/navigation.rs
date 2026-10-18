@@ -9,12 +9,19 @@ use std::collections::VecDeque;
 
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, GuildMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker},
 };
 
 /// Maximum number of destinations kept in memory. When full, pushing a new
 /// destination drops the oldest one from the back stack.
 pub(super) const MAX_NAVIGATION_HISTORY: usize = 50;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MessageTarget {
+    pub guild_id: Option<Id<GuildMarker>>,
+    pub channel_id: Id<ChannelMarker>,
+    pub message_id: Id<MessageMarker>,
+}
 
 /// A place in the home screen that back/forward navigation can return to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

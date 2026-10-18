@@ -5,17 +5,9 @@
 //! sender for playback, which [`Incoming`] fills from the packets as they
 //! arrive and the output device drains through [`Mixer`].
 //!
-//! Capture stays at the device's own sample rate — songbird's mixer resamples
-//! whatever an input declares, so there's nothing to convert on the way in.
-//! Playback is the other way round: packets are decoded to 48kHz stereo, and
-//! the output stream lays them out for the device.
-//!
-//! Packets are decoded here rather than by songbird. Its decoder hands Opus
-//! the DAVE trailer along with the frame on an end-to-end encrypted call,
-//! which SILK mostly shrugs off but CELT — music, and anything else sent at
-//! full band — reads its raw bits from the end of, and falls apart on. Its
-//! playout also holds packets back by RTP timestamp, which turns a sender
-//! whose timestamps run ahead of its packets into stretches of silence.
+//! Capture stays at the device's own sample rate; [`transmit`] resamples it
+//! to 48kHz stereo and encodes Opus. Received packets arrive here without
+//! transport encryption or DAVE framing and are decoded for the output device.
 //!
 //! Both directions do convert sample formats, to `f32` and back: the format a
 //! device reports is whichever one its driver prefers, and a call with no
@@ -34,26 +26,31 @@
 mod activity;
 mod devices;
 mod incoming;
+#[cfg(test)]
 mod microphone;
 mod playback;
 pub(crate) mod processing;
 mod ring;
 pub(crate) mod settings;
+pub(super) mod transmit;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io::{Read, Result as IoResult, Seek, SeekFrom};
+use std::io::{Read, Result as IoResult};
+#[cfg(test)]
+use std::io::{Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use songbird::constants::SAMPLE_RATE;
-use songbird::input::Input;
-use songbird::input::core::io::MediaSource;
+#[cfg(test)]
+use songbird::input::{Input, core::io::MediaSource};
 
 use activity::CaptureActivity;
 pub use devices::{AudioDevice, input_devices, output_devices};
 use devices::{chosen_input, chosen_output, ring_channels, run_devices};
 use incoming::Incoming;
+#[cfg(test)]
 use microphone::microphone;
 use playback::Mixer;
 use ring::SampleRing;
@@ -218,8 +215,8 @@ impl AudioIo {
         this
     }
 
-    /// The microphone as something songbird can play: raw PCM in the device's
-    /// own format that never ends. The mixer resamples it to the call's.
+    /// The parsed PCM adapter exercises capture without decoder read-ahead.
+    #[cfg(test)]
     pub fn mic_input(&self) -> Input {
         let (sample_rate, channels) = self.capture_format;
         microphone(
@@ -246,9 +243,8 @@ impl AudioIo {
         );
     }
 
-    /// Queues one Opus packet from the call for playback. `opus` is the
-    /// frame alone, with every layer of encryption already taken off.
-    pub fn receive(&self, ssrc: u32, sequence: u16, opus: &[u8]) {
+    /// Binds the sender before the first decoded sample reaches playback.
+    pub(super) fn receive_from(&self, user_id: u64, ssrc: u32, sequence: u16, opus: &[u8]) {
         if self.deafened.load(Ordering::Relaxed) || self.shutdown.is_stopped() {
             return;
         }
@@ -261,7 +257,8 @@ impl AudioIo {
                 let Some(stream) = Incoming::new() else {
                     return;
                 };
-                self.mixer.add(ssrc, stream.ring.clone());
+                self.mixer
+                    .add_with_user(ssrc, Some(user_id), stream.ring.clone());
                 entry.insert(stream)
             }
         };
@@ -278,7 +275,7 @@ impl AudioIo {
 
     /// Stops playing everyone. Whoever is still talking starts over with a
     /// fresh decoder at their next packet.
-    fn forget_all(&self) {
+    pub(super) fn forget_all(&self) {
         if let Ok(mut incoming) = self.incoming.lock() {
             incoming.clear();
         }
@@ -322,12 +319,16 @@ impl AudioIo {
         !self.shutdown.is_stopped() && self.capture.open(self.capture.control.snapshot())
     }
 
-    /// Closes both devices and ends the thread holding them open.
-    ///
-    /// Called outright rather than left to [`Drop`], because songbird's event
-    /// handlers hold the same `Arc` and outlive the call by however long the
-    /// driver takes to shut down — long enough to leave the microphone light
-    /// on after the user hung up.
+    pub(super) fn accepts_capture_epoch(&self, epoch: u64) -> bool {
+        self.capture.control.snapshot().epoch() == epoch && self.can_transmit()
+    }
+
+    pub(super) fn end_call(&self) {
+        self.capture.control.end_session(self.capture.session);
+        self.stop();
+    }
+
+    /// Closes devices immediately, even while media tasks retain references.
     pub fn stop(&self) {
         self.shutdown.stop();
         self.capture.processing.stop();
@@ -342,10 +343,10 @@ impl Drop for AudioIo {
     }
 }
 
-/// The mixer's view of the microphone: a stream of raw little-endian `f32`
+/// The transmitter's view of the microphone: raw little-endian `f32`
 /// that returns silence rather than ending when the device falls behind.
 ///
-/// Ending it would end the track, and the call would go quiet for good.
+/// Shutdown ends the source; temporary capture starvation produces silence.
 struct MicSource {
     capture: Arc<Capture>,
     shutdown: Arc<Shutdown>,
@@ -392,12 +393,14 @@ impl Read for MicSource {
     }
 }
 
+#[cfg(test)]
 impl Seek for MicSource {
     fn seek(&mut self, _pos: SeekFrom) -> IoResult<u64> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
+#[cfg(test)]
 impl MediaSource for MicSource {
     fn is_seekable(&self) -> bool {
         false

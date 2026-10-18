@@ -16,6 +16,10 @@ const FILE_NAME: &str = "prefs.json";
 pub struct Prefs {
     #[serde(default)]
     pub audio: crate::voice::AudioPreferences,
+    #[serde(default)]
+    pub peer_audio: crate::voice::peer_settings::ScopedPeerAudioPrefs,
+    #[serde(default)]
+    pub notifications: crate::platform::notifications::NotificationPreferences,
     /// Name of the selected theme, as it appears in the theme's JSON. `None`
     /// until the user picks one, which leaves the system appearance in charge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +145,7 @@ mod tests {
                 threshold_db: -55.,
                 mode: InputMode::PushToTalk,
                 ptt_key: 0xa3,
+                ..AudioPreferences::default()
             },
             theme: Some("dark".into()),
             ..Prefs::default()

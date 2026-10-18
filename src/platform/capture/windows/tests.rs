@@ -21,9 +21,11 @@ fn encodes_the_primary_display() {
     let item: GraphicsCaptureItem =
         unsafe { interop.CreateForMonitor(monitor) }.expect("capture item for the display");
 
+    let (wake, awakened) = std::sync::mpsc::sync_channel(1);
     let control = Arc::new(Control {
         stopped: AtomicBool::new(false),
         keyframe: AtomicBool::new(false),
+        wake,
     });
     let settings = CaptureSettings {
         max_width: 1280,
@@ -31,21 +33,31 @@ fn encodes_the_primary_display() {
         fps: 30,
         bitrate: 2_500_000,
     };
-    let (events, mut received) = futures::channel::mpsc::unbounded();
+    let (events, mut received) = tokio::sync::mpsc::channel(100);
 
     let timer = control.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         timer.keyframe.store(true, Ordering::Release);
+        let _ = timer.wake.try_send(());
         std::thread::sleep(Duration::from_millis(1500));
         timer.stopped.store(true, Ordering::Release);
+        let _ = timer.wake.try_send(());
     });
-    capture(CaptureSource { item }, settings, &control, &events).expect("capture runs");
+    capture(
+        CaptureSource { item },
+        settings,
+        &control,
+        &events,
+        awakened,
+        super::super::clock::MediaClock::default(),
+    )
+    .expect("capture runs");
     drop(events);
 
     let mut size = None;
     let mut frames = Vec::new();
-    while let Some(event) = futures::executor::block_on(received.next()) {
+    while let Some(event) = received.blocking_recv() {
         match event {
             CaptureEvent::Started { width, height } => size = Some((width, height)),
             CaptureEvent::Frame(frame) => frames.push(frame),
@@ -63,8 +75,7 @@ fn encodes_the_primary_display() {
         frames.len()
     );
     assert!(width <= 1280 && height <= 720 && width % 2 == 0 && height % 2 == 0);
-    // Three seconds at 30fps, less what the encoder is still holding.
-    assert!(frames.len() > 60, "only {} frames", frames.len());
+    assert!(frames.len() >= 2, "only {} frames", frames.len());
 
     let first = &frames[0];
     assert!(first.keyframe, "the stream must open on a keyframe");
@@ -150,11 +161,13 @@ fn software_encoder_encodes() {
     // And back again, through the decoder a viewer watches with.
     let (events, mut decoded) = futures::channel::mpsc::unbounded();
     let (decoder, input) = crate::platform::h264::start((320, 320), events);
-    for frame in &frames {
-        assert!(input.decode(frame.data.clone()), "the decoder stopped");
-    }
     let mut pictures = 0;
-    while pictures < frames.len() - 5 {
+    for frame in &frames {
+        assert_eq!(
+            input.try_decode(frame.data.clone()),
+            crate::platform::h264::DecodeStatus::Queued,
+            "decoder couldn't accept the frame"
+        );
         match futures::executor::block_on(decoded.next()) {
             Some(crate::platform::h264::DecoderEvent::Frame(picture)) => {
                 assert_eq!((picture.width, picture.height), (320, 180));

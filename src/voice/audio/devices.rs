@@ -383,7 +383,8 @@ mod local_speaking_tests {
         ring::SampleRing,
         settings::{AudioControl, AudioPreferences},
     };
-    use crate::voice::{Speakers, TickHandler, VoiceEvent};
+    use crate::voice::{VoiceEvent, report_speaking};
+    use std::collections::HashSet;
     use std::sync::Mutex;
     use twilight_model::id::Id;
 
@@ -417,75 +418,72 @@ mod local_speaking_tests {
         let local = Id::new(42);
         let audio = test_audio();
         let (events, mut received) = futures::channel::mpsc::unbounded();
-        let handler = TickHandler {
-            audio: Arc::new(Mutex::new(audio.clone())),
-            local_user: local,
-            speakers: Arc::new(Mutex::new(Speakers::default())),
-            events,
+        let mut users = HashSet::new();
+        let update_local = |audio: &AudioIo, users: &mut HashSet<_>| {
+            report_speaking(users, local.get(), audio.is_speaking(), &events);
         };
         push(&[0.1f32; 960], &audio);
-        handler.update_speaking(std::iter::empty());
+        update_local(&audio, &mut users);
         assert!(
             matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users.contains(&local)),
             "microphone activity must reach the participant state used by both voice views"
         );
-        handler.update_speaking(std::iter::empty());
+        update_local(&audio, &mut users);
         assert!(
             received.try_recv().is_err(),
             "unchanged activity must not repaint every tick"
         );
 
         let remote = Id::new(43);
-        if let Ok(mut speakers) = handler.speakers.lock() {
-            speakers.users.insert(7, remote);
-        }
-        handler.update_speaking([7].into_iter());
+        report_speaking(&mut users, remote.get(), true, &events);
         assert!(
             matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users == [local, remote].into())
         );
         audio.set_muted(true);
         push(&[0.1f32; 960], &audio);
-        handler.update_speaking([7].into_iter());
+        update_local(&audio, &mut users);
         assert!(
             matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users == [remote].into())
         );
         audio.set_muted(false);
-        handler.update_speaking([7].into_iter());
+        update_local(&audio, &mut users);
         assert!(
             received.try_recv().is_err(),
             "unmuting must not reuse old microphone activity"
         );
 
         push(&[0.1f32; 960], &audio);
-        handler.update_speaking(std::iter::empty());
+        update_local(&audio, &mut users);
+        assert!(
+            matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users == [local, remote].into())
+        );
+        report_speaking(&mut users, remote.get(), false, &events);
         assert!(
             matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users == [local].into())
         );
         audio.set_deafened(true);
-        handler.update_speaking(std::iter::empty());
+        update_local(&audio, &mut users);
         assert!(matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users.is_empty()));
         push(&[0.1f32; 960], &audio);
         audio.set_deafened(false);
-        handler.update_speaking(std::iter::empty());
+        update_local(&audio, &mut users);
         assert!(received.try_recv().is_err());
 
         let replacement = test_audio();
-        if let Ok(mut current) = handler.audio.lock() {
-            *current = replacement.clone();
-        }
+        audio.stop();
         push(&[0.1f32; 960], &audio);
-        handler.update_speaking(std::iter::empty());
+        update_local(&replacement, &mut users);
         assert!(
             received.try_recv().is_err(),
             "the old microphone must no longer drive the indicator"
         );
         push(&[0.1f32; 960], &replacement);
-        handler.update_speaking(std::iter::empty());
+        update_local(&replacement, &mut users);
         assert!(
             matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users == [local].into())
         );
         replacement.stop();
-        handler.update_speaking(std::iter::empty());
+        update_local(&replacement, &mut users);
         assert!(matches!(received.try_recv(), Ok(VoiceEvent::Speaking(users)) if users.is_empty()));
     }
 
@@ -780,10 +778,9 @@ mod local_speaking_tests {
     }
 
     #[test]
-    fn server_suppression_keeps_pcm_speaking_and_songbird_transport_closed() {
+    fn server_suppression_keeps_pcm_speaking_and_native_transmission_closed() {
         use crate::discord::VoiceUserState;
-        use crate::voice::{Call, InputMode};
-        let _runtime = crate::platform::runtime::handle().enter();
+        use crate::voice::InputMode;
         let audio = test_audio();
         let control = &audio.capture.control;
         let mut preferences = AudioPreferences {
@@ -808,13 +805,6 @@ mod local_speaking_tests {
             avatar_url: None,
         };
         control.set_server_restricted(state.server_restricted());
-        let mut driver = songbird::driver::Driver::new(songbird::Config::default());
-        let mic = driver.play_input(audio.mic_input());
-        let mut call = Call {
-            driver,
-            audio: Arc::new(Mutex::new(audio.clone())),
-            mic,
-        };
         for mode in [
             InputMode::PushToTalk,
             InputMode::AlwaysOn,
@@ -826,8 +816,7 @@ mod local_speaking_tests {
             control.key_event(preferences.ptt_key, false);
             control.key_event(preferences.ptt_key, true);
             push(&[0.4; 4096], &audio);
-            call.update_transmission();
-            assert!(call.driver.is_mute());
+            assert!(!audio.can_transmit());
             assert!(!audio.is_speaking());
             assert!(read_mic(&audio).iter().all(|sample| *sample == 0.));
             assert!(
@@ -838,8 +827,40 @@ mod local_speaking_tests {
         state.suppress = false;
         control.set_server_restricted(state.server_restricted());
         push(&[0.1; 4096], &audio);
-        call.update_transmission();
-        assert!(!call.driver.is_mute());
+        assert!(audio.can_transmit());
         assert!((read_mic(&audio)[511] - 0.2).abs() < 0.00001);
+    }
+
+    #[test]
+    fn ending_native_call_closes_ptt_and_capture_with_handles_retained() {
+        use crate::voice::InputMode;
+        use std::io::Read;
+        let audio = test_audio();
+        let retained = audio.clone();
+        let control = &audio.capture.control;
+        let preferences = AudioPreferences {
+            mode: InputMode::PushToTalk,
+            ..AudioPreferences::default()
+        };
+        control.configure(&preferences, true);
+        control.ptt_ready(false);
+        control.key_event(preferences.ptt_key, true);
+        push(&[0.4; 4096], &audio);
+        let epoch = control.snapshot().epoch();
+        assert!(audio.accepts_capture_epoch(epoch));
+        assert!(audio.is_speaking());
+        let mut source = super::super::MicSource {
+            capture: audio.capture.clone(),
+            shutdown: audio.shutdown.clone(),
+            samples: Vec::new(),
+        };
+        audio.end_call();
+        control.key_event(preferences.ptt_key, false);
+        control.key_event(preferences.ptt_key, true);
+        push(&[0.8; 4096], &retained);
+        assert!(!retained.can_transmit());
+        assert!(!retained.accepts_capture_epoch(epoch));
+        assert!(!retained.is_speaking());
+        assert_eq!(source.read(&mut [0u8; 64]).unwrap(), 0);
     }
 }

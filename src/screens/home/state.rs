@@ -26,7 +26,7 @@ use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
 use super::emoji::PickerRow;
 use super::folders::RailEntry;
-use super::navigation::NavigationHistory;
+use super::navigation::{MessageTarget, NavigationHistory};
 use super::unread::Unreads;
 use super::voice::{PendingVoice, ScreenShare, StreamWatch, VoiceCall};
 use crate::voice::VoiceEngine;
@@ -229,6 +229,13 @@ pub(super) struct VideoPlayback {
 pub struct HomeScreen {
     pub(super) view: View,
     pub(super) navigation_history: NavigationHistory,
+    pub(super) relationships: super::relationships::RelationshipsState,
+    pub(super) camera: super::camera::CameraState,
+    pub(super) inbox: super::inbox::InboxState,
+    pub(super) threads: super::threads::ThreadState,
+    pub(super) threads_open: bool,
+    pub(super) thread_channels: HashMap<Id<ChannelMarker>, (Id<GuildMarker>, discord::Channel)>,
+    pub(super) message_tools: super::message_tools::MessageToolsState,
     pub(super) guilds: Vec<Guild>,
     /// The signed-in user, shown in the sidebar account panel. `None` until the
     /// `GET /users/@me` fetch resolves (or if it fails).
@@ -279,6 +286,9 @@ pub struct HomeScreen {
     pub(super) channels_loading: bool,
     pub(super) channel_load_generation: u64,
     pub(super) pending_channel_selection: Option<(Id<ChannelMarker>, bool)>,
+    pub(super) pending_message_target: Option<MessageTarget>,
+    pub(super) message_load_generation: u64,
+    pub(super) highlighted_message: Option<Id<MessageMarker>>,
     pub(super) channels_error: Option<String>,
     pub(super) messages: Vec<discord::Message>,
     pub(super) messages_loading: bool,
@@ -417,6 +427,7 @@ pub struct HomeScreen {
     pub(super) typing_sent: Option<(Id<ChannelMarker>, Instant)>,
     pub(super) typists: HashMap<Id<ChannelMarker>, Vec<Typist>>,
     pub(super) _composer_changed: Subscription,
+    pub(super) _message_search_changed: Subscription,
     pub(super) messages_list: ListState,
     pub(super) video: Option<VideoPlayback>,
     /// Owns the decoded bitmaps for the currently displayed messages' images.
@@ -441,6 +452,9 @@ impl HomeScreen {
         });
 
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let search_changed = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
+            this.on_search_event(event, cx)
+        });
 
         let composer_changed = cx.subscribe(&message_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -475,6 +489,13 @@ impl HomeScreen {
         let mut this = Self {
             view: View::Guild,
             navigation_history: NavigationHistory::default(),
+            relationships: super::relationships::RelationshipsState::new(window, cx),
+            camera: super::camera::CameraState::new(window, cx),
+            inbox: super::inbox::InboxState::new(window, cx),
+            threads: super::threads::ThreadState::new(window, cx),
+            threads_open: false,
+            thread_channels: HashMap::new(),
+            message_tools: super::message_tools::MessageToolsState::new(window, cx),
             guilds: Vec::new(),
             rail_entries: Vec::new(),
             guild_folders: None,
@@ -501,6 +522,9 @@ impl HomeScreen {
             channels_loading: false,
             channel_load_generation: 0,
             pending_channel_selection: None,
+            pending_message_target: None,
+            message_load_generation: 0,
+            highlighted_message: None,
             channels_error: None,
             messages: Vec::new(),
             messages_loading: false,
@@ -563,6 +587,7 @@ impl HomeScreen {
             typing_sent: None,
             typists: HashMap::new(),
             _composer_changed: composer_changed,
+            _message_search_changed: search_changed,
             messages_scroll: SmoothScroll::list(messages_list.clone()),
             messages_list,
             image_cache: RetainAllImageCache::new(cx),

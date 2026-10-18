@@ -7,10 +7,8 @@
 //! encoder, the fallback for a machine without one, reads the frame back to
 //! system memory.
 //!
-//! Capture is polled rather than driven by the frame pool's event: the stream
-//! wants frames at a steady rate, and a static screen produces none, so each
-//! tick takes the newest frame if one arrived and re-sends the last one if
-//! not. Encoders make a repeated frame almost free.
+//! Frame notifications and stop requests wake the worker; a static source
+//! does not keep encoding or waking a timer.
 
 mod convert;
 mod encode;
@@ -21,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use futures::channel::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{
     Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCapturePicker,
@@ -89,7 +87,9 @@ pub(super) fn capture(
     source: CaptureSource,
     settings: CaptureSettings,
     control: &Control,
-    events: &UnboundedSender<CaptureEvent>,
+    events: &Sender<CaptureEvent>,
+    awakened: std::sync::mpsc::Receiver<()>,
+    clock: super::clock::MediaClock,
 ) -> Result<(), String> {
     let _platform = MediaFoundation::startup()?;
 
@@ -108,6 +108,10 @@ pub(super) fn capture(
     let session = pool
         .CreateCaptureSession(&item)
         .context("Couldn't start capturing")?;
+    let _capture_session = ActiveCapture {
+        session: session.clone(),
+        pool: pool.clone(),
+    };
     // Both are newer than capture itself; on a build without them, the yellow
     // border stays and the cursor is captured anyway.
     let _ = session.SetIsBorderRequired(false);
@@ -115,11 +119,19 @@ pub(super) fn capture(
 
     let closed = Arc::new(AtomicBool::new(false));
     let closed_flag = closed.clone();
+    let closed_wake = control.wake.clone();
     item.Closed(&TypedEventHandler::new(move |_, _| {
         closed_flag.store(true, Ordering::Release);
+        let _ = closed_wake.try_send(());
         Ok(())
     }))
     .context("Couldn't start capturing")?;
+    let frame_wake = control.wake.clone();
+    pool.FrameArrived(&TypedEventHandler::new(move |_, _| {
+        let _ = frame_wake.try_send(());
+        Ok(())
+    }))
+    .context("Couldn't subscribe to captured frames")?;
     session.StartCapture().context("Couldn't start capturing")?;
 
     let out_size = output_size(pool_size, &settings);
@@ -127,7 +139,7 @@ pub(super) fn capture(
     let mut encoder = Encoder::new(&device, &context, out_size, &settings)?;
 
     if events
-        .unbounded_send(CaptureEvent::Started {
+        .blocking_send(CaptureEvent::Started {
             width: out_size.0,
             height: out_size.1,
         })
@@ -137,11 +149,14 @@ pub(super) fn capture(
     }
 
     let interval = Duration::from_secs(1) / settings.fps;
-    let started = Instant::now();
-    let mut next_tick = started;
+    let mut next_tick = Instant::now();
     let mut have_frame = false;
+    let mut taken = Duration::ZERO;
 
     loop {
+        if awakened.recv().is_err() {
+            break;
+        }
         if control.is_stopped() || closed.load(Ordering::Acquire) {
             break;
         }
@@ -152,7 +167,13 @@ pub(super) fn capture(
         while let Ok(frame) = pool.TryGetNextFrame() {
             newest = Some(frame);
         }
+        let refreshed = newest.is_some();
         if let Some(frame) = newest {
+            taken = frame
+                .SystemRelativeTime()
+                .ok()
+                .map(|time| clock.captured_at(time.Duration.max(0) as u64, qpc_hns()))
+                .unwrap_or_else(|| clock.elapsed());
             let size = frame
                 .ContentSize()
                 .context("Couldn't read a captured frame")?;
@@ -172,33 +193,56 @@ pub(super) fn capture(
             have_frame = true;
         }
 
-        next_tick += interval;
+        let keyframe = control.take_keyframe();
+        if Instant::now() + Duration::from_millis(1) < next_tick && !keyframe {
+            continue;
+        }
+        if keyframe && !refreshed {
+            taken = clock.elapsed();
+        }
+        next_tick = Instant::now() + interval;
 
         if have_frame {
             let texture = converter.convert()?;
-            let keyframe = control.take_keyframe();
             // Stamped with when it was taken rather than counted, so a tick
             // the loop fell behind on doesn't put the stream's clock out.
-            let taken = started.elapsed();
             for frame in encoder.encode(&texture, taken, keyframe, next_tick)? {
-                if events.unbounded_send(CaptureEvent::Frame(frame)).is_err() {
-                    return Ok(());
+                match events.try_send(CaptureEvent::Frame(frame)) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Ok(()),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        control.keyframe.store(true, Ordering::Release);
+                    }
                 }
             }
         }
-
-        let now = Instant::now();
-        match next_tick.checked_duration_since(now) {
-            Some(wait) => std::thread::sleep(wait),
-            // Running behind — a slow encode, or the machine was asleep.
-            // Start counting again from now rather than racing to catch up.
-            None => next_tick = now,
-        }
     }
 
-    let _ = session.Close();
-    let _ = pool.Close();
     Ok(())
+}
+
+struct ActiveCapture {
+    session: GraphicsCaptureSession,
+    pool: Direct3D11CaptureFramePool,
+}
+impl Drop for ActiveCapture {
+    fn drop(&mut self) {
+        let _ = self.session.Close();
+        let _ = self.pool.Close();
+    }
+}
+
+pub(crate) fn qpc_hns() -> u64 {
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    let (mut ticks, mut frequency) = (0, 0);
+    unsafe {
+        let _ = QueryPerformanceCounter(&mut ticks);
+        let _ = QueryPerformanceFrequency(&mut frequency);
+    }
+    if frequency <= 0 {
+        return 0;
+    }
+    (ticks.max(0) as u128 * 10_000_000 / frequency as u128) as u64
 }
 
 /// The stream's frame size: the source fitted inside the configured maximum,
@@ -283,13 +327,13 @@ fn texture(
 }
 
 /// COM and Media Foundation, for the life of the capture thread.
-struct MediaFoundation {
+pub(crate) struct MediaFoundation {
     /// Whether this thread's COM apartment is ours to close.
     owns_com: bool,
 }
 
 impl MediaFoundation {
-    fn startup() -> Result<Self, String> {
+    pub(crate) fn startup() -> Result<Self, String> {
         let owns_com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
         match unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) } {
             Ok(()) => Ok(Self { owns_com }),
@@ -300,6 +344,58 @@ impl MediaFoundation {
                 Err(format!("Couldn't start Media Foundation: {err}"))
             }
         }
+    }
+}
+
+/// Camera frames use the same GPU device and hardware encoder as screen frames.
+pub(crate) struct Nv12Encoder {
+    encoder: Encoder,
+    device_context: ID3D11DeviceContext,
+    input: Vec<ID3D11Texture2D>,
+    next: usize,
+    size: (u32, u32),
+}
+
+impl Nv12Encoder {
+    pub(crate) fn new(size: (u32, u32), settings: &CaptureSettings) -> Result<Self, String> {
+        let (device, context) = create_device()?;
+        let encoder = Encoder::new(&device, &context, size, settings)?;
+        let input = (0..4)
+            .map(|_| texture(&device, size, DXGI_FORMAT_NV12, 0, D3D11_USAGE_DEFAULT, 0))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            encoder,
+            device_context: context,
+            input,
+            next: 0,
+            size,
+        })
+    }
+
+    pub(crate) fn encode(
+        &mut self,
+        data: &[u8],
+        timestamp: Duration,
+        keyframe: bool,
+        deadline: Instant,
+    ) -> Result<Vec<super::EncodedFrame>, String> {
+        let length = self.size.0 as usize * self.size.1 as usize * 3 / 2;
+        if data.len() < length {
+            return Err("Camera returned an incomplete NV12 frame".into());
+        }
+        let input = &self.input[self.next];
+        self.next = (self.next + 1) % self.input.len();
+        unsafe {
+            self.device_context.UpdateSubresource(
+                input,
+                0,
+                None,
+                data.as_ptr().cast(),
+                self.size.0,
+                0,
+            )
+        };
+        self.encoder.encode(input, timestamp, keyframe, deadline)
     }
 }
 

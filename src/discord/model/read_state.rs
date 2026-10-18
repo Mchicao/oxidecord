@@ -22,12 +22,14 @@ use super::RawRole;
 /// Milliseconds from the Unix epoch to Discord's, which snowflakes count from.
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 
+#[derive(Clone)]
 pub struct ReadState {
     pub channel_id: Id<ChannelMarker>,
     pub last_message_id: Id<MessageMarker>,
 }
 
 /// The newest message in a channel.
+#[derive(Clone)]
 pub struct ChannelLatest {
     pub channel_id: Id<ChannelMarker>,
     pub last_message_id: Id<MessageMarker>,
@@ -35,6 +37,7 @@ pub struct ChannelLatest {
 
 /// A guild's channels as far as its unread mark goes: the ones the user can
 /// see that hold messages the app can show.
+#[derive(Clone)]
 pub struct GuildUnreads {
     pub guild_id: Id<GuildMarker>,
     /// When the user joined, as a snowflake. A channel they've never opened
@@ -43,6 +46,7 @@ pub struct GuildUnreads {
     pub channels: Vec<UnreadChannel>,
 }
 
+#[derive(Clone)]
 pub struct UnreadChannel {
     pub id: Id<ChannelMarker>,
     /// The category, whose mute carries down to the channel.
@@ -52,6 +56,7 @@ pub struct UnreadChannel {
 
 /// What the user has muted in one guild, or across their DMs when `guild_id`
 /// is `None`.
+#[derive(Clone)]
 pub struct MuteSettings {
     pub guild_id: Option<Id<GuildMarker>>,
     pub muted: bool,

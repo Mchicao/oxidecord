@@ -11,8 +11,6 @@ use crate::screens::home::HomeScreen;
 use crate::ui::button::Button;
 use crate::voice;
 
-use super::CAMERA_UNAVAILABLE;
-
 impl HomeScreen {
     pub(super) fn render_call_controls(&self, cx: &Context<Self>) -> impl IntoElement {
         h_flex()
@@ -65,23 +63,71 @@ impl HomeScreen {
                 ),
             )
             .child(
-                control(
+                div().id("camera-controls").child(control(
                     "call-camera",
-                    "icons/video-off.svg",
-                    CAMERA_UNAVAILABLE,
-                    false,
-                )
-                .disabled(true),
+                    if self.camera.active { "icons/video.svg" } else { "icons/video-off.svg" },
+                    "Toggle Camera (right-click to choose a camera)",
+                    self.camera.active,
+                ).disabled(!self.can_use_camera())
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_camera(window, cx))))
+                .context_menu({
+                    let screen = cx.entity().downgrade();
+                    move |menu, _, cx| {
+                        let Some(entity) = screen.upgrade() else { return menu };
+                        let state = entity.read(cx);
+                        let mut menu = menu.label("Camera");
+                        for device in &state.camera.devices {
+                            let id = device.id.clone();
+                            let screen = screen.clone();
+                            menu = menu.item(PopupMenuItem::new(device.name.clone()).on_click(move |_, window, cx| {
+                                if let Some(screen) = screen.upgrade() {
+                                    screen.update(cx, |this, cx| this.select_camera(id.clone(), window, cx));
+                                }
+                            }));
+                        }
+                        let refresh = screen.clone();
+                        menu = menu.separator().item(PopupMenuItem::new("Refresh cameras").on_click(move |_, _, cx| {
+                            if let Some(screen) = refresh.upgrade() { screen.update(cx, |this, cx| this.refresh_cameras(cx)); }
+                        }));
+                        let preview = screen.clone();
+                        menu.item(PopupMenuItem::new("Toggle local preview").on_click(move |_, window, cx| {
+                            if let Some(screen) = preview.upgrade() { screen.update(cx, |this, cx| this.preview_camera(window, cx)); }
+                        }))
+                    }
+                }),
             )
             .child(
-                control(
+                div().id("screen-share-controls").child(control(
                     "call-share",
                     "icons/screen-share.svg",
                     self.share_tooltip(),
                     self.screen_share.is_some(),
                 )
                 .disabled(!self.share_button_enabled())
-                .on_click(cx.listener(|this, _, window, cx| this.toggle_screen_share(window, cx))),
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_screen_share(window, cx))))
+                .context_menu({
+                    let screen = cx.entity().downgrade();
+                    move |menu, _, _| {
+                        let mut menu = menu.label("Screen share audio");
+                        let off = screen.clone();
+                        menu = menu.item(PopupMenuItem::new("Share without audio").on_click(move |_, window, cx| {
+                            if let Some(screen) = off.upgrade() { screen.update(cx, |this, cx| this.toggle_screen_share_with_audio(crate::platform::loopback::AudioShare::Off, window, cx)); }
+                        }));
+                        match crate::platform::loopback::applications() {
+                            Ok(apps) => for app in apps {
+                                let screen = screen.clone();
+                                menu = menu.item(PopupMenuItem::new(format!("Audio: {}", app.name)).on_click(move |_, window, cx| {
+                                    if let Some(screen) = screen.upgrade() { screen.update(cx, |this, cx| this.toggle_screen_share_with_audio(crate::platform::loopback::AudioShare::Process(app.process_id), window, cx)); }
+                                }));
+                            },
+                            Err(error) => { menu = menu.label(error); }
+                        }
+                        let system = screen.clone();
+                        menu.separator().item(PopupMenuItem::new("Share all system audio (including this call)").on_click(move |_, window, cx| {
+                            if let Some(screen) = system.upgrade() { screen.update(cx, |this, cx| this.toggle_screen_share_with_audio(crate::platform::loopback::AudioShare::SystemOutput, window, cx)); }
+                        }))
+                    }
+                }),
             )
             .child(
                 Button::new("call-hangup")

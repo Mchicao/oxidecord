@@ -224,7 +224,11 @@ impl HomeScreen {
             return;
         };
 
-        watch.stream = Some(WatchStream::start(
+        let audio = self
+            .voice_engine
+            .as_ref()
+            .map(|engine| engine.stream_audio());
+        watch.stream = Some(WatchStream::start_with_audio(
             StreamConnection {
                 stream_key: watch.stream_key.clone(),
                 server_id,
@@ -238,6 +242,7 @@ impl HomeScreen {
             DEFAULT_TARGET,
             events,
             watch.frames.clone(),
+            audio,
         ));
         cx.notify();
     }

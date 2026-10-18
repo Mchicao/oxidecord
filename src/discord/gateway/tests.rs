@@ -246,6 +246,58 @@ fn dispatch_json(name: &str, json: &str) -> Vec<GatewayEvent> {
     )
 }
 
+#[test]
+fn malformed_relationship_snapshot_keeps_ready_and_requests_a_full_refresh() {
+    let events = dispatch_json(
+        "READY",
+        r#"{"user":{"id":"1"},"guilds":[],"relationships":[{"id":"2","type":1,"user":{"id":"2","username":"friend"}},{"id":"3","type":2}]}"#,
+    );
+    assert!(
+        matches!(events.first(), Some(GatewayEvent::Ready { user_id, .. }) if *user_id == Id::new(1))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Relationships(None)))
+    );
+    let events = dispatch_json(
+        "READY",
+        r#"{"user":{"id":"1"},"guilds":[],"relationships":[]}"#,
+    );
+    assert!(events.iter().any(
+        |event| matches!(event, GatewayEvent::Relationships(Some(snapshot)) if snapshot.is_empty())
+    ));
+}
+
+#[test]
+fn relationship_and_thread_dispatches_keep_their_target_identity() {
+    let events = dispatch_json(
+        "CHANNEL_PINS_UPDATE",
+        r#"{"channel_id":"15","last_pin_timestamp":null}"#,
+    );
+    assert!(
+        matches!(events.as_slice(), [GatewayEvent::PinsUpdate { channel_id }] if *channel_id == Id::new(15))
+    );
+    let events = dispatch_json(
+        "RELATIONSHIP_ADD",
+        r#"{"id":"2","type":2,"user":{"id":"2","username":"blocked"}}"#,
+    );
+    assert!(
+        matches!(events.as_slice(), [GatewayEvent::Relationship(crate::discord::relationships::RelationshipEvent::Add(relationship))] if relationship.id == Id::new(2) && relationship.kind.is_blocked())
+    );
+    let events = dispatch_json("RELATIONSHIP_REMOVE", r#"{"id":"2","type":2}"#);
+    assert!(
+        matches!(events.as_slice(), [GatewayEvent::Relationship(crate::discord::relationships::RelationshipEvent::Remove(relationship))] if relationship.id == Id::new(2))
+    );
+    let events = dispatch_json(
+        "THREAD_DELETE",
+        r#"{"id":"20","guild_id":"10","parent_id":"15"}"#,
+    );
+    assert!(
+        matches!(events.as_slice(), [GatewayEvent::Thread(crate::discord::ThreadEvent::Delete { guild_id, thread_id, parent_id })] if (*guild_id, *thread_id, *parent_id) == (Id::new(10), Id::new(20), Id::new(15)))
+    );
+}
+
 fn ready_voice_states(events: &[GatewayEvent]) -> &[VoiceUserState] {
     match events.first() {
         Some(GatewayEvent::Ready { voice_states, .. }) => voice_states,

@@ -23,6 +23,46 @@ use crate::voice::cues::Cue;
 use crate::voice::{VoiceConnection, VoiceEvent};
 
 impl HomeScreen {
+    pub(in crate::screens::home) fn hydrate_peer_audio(&self, account_id: u64) {
+        if self.self_user_id.is_none_or(|id| id.get() != account_id) {
+            return;
+        }
+        if let Some(engine) = &self.voice_engine
+            && let Some(settings) = prefs::load().peer_audio.accounts.get(&account_id)
+        {
+            engine.audio_settings().load_peer_settings(settings);
+        }
+    }
+
+    pub(in crate::screens::home) fn attach_voice_hotkeys(&self, cx: &mut Context<Self>) {
+        let Some(engine) = &self.voice_engine else {
+            return;
+        };
+        let (sender, mut received) = futures::channel::mpsc::channel(8);
+        engine.audio_settings().set_hotkey_hook(move |action| {
+            let _ = sender.clone().try_send(action);
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some(action) = received.next().await {
+                if this
+                    .update(cx, |this, cx| match action {
+                        crate::platform::ptt::HotkeyAction::ToggleMute => {
+                            this.toggle_voice_mute(cx)
+                        }
+                        crate::platform::ptt::HotkeyAction::ToggleDeafen => {
+                            this.toggle_voice_deafen(cx)
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     pub(in crate::screens::home) fn in_voice_channel(&self, channel_id: Id<ChannelMarker>) -> bool {
         self.voice
             .as_ref()
@@ -124,13 +164,14 @@ impl HomeScreen {
         if let Some(gateway) = &self.gateway {
             gateway.update_voice_state(guild_id, None, self.voice_muted, self.voice_deafened);
         }
-        self.end_call_locally();
+        self.end_call_locally(cx);
         cx.notify();
     }
 
     /// Tears down this side of the call: the connection and everything waiting
     /// on or drawn from it.
-    fn end_call_locally(&mut self) {
+    fn end_call_locally(&mut self, cx: &mut Context<Self>) {
+        self.end_camera_call(cx);
         if let Some(engine) = &self.voice_engine {
             engine.disconnect();
         }
@@ -242,11 +283,12 @@ impl HomeScreen {
         if let Some(call) = &self.voice
             && let Some(gateway) = &self.gateway
         {
-            gateway.update_voice_state(
+            gateway.update_voice_state_with_video(
                 call.guild_id,
                 Some(call.channel_id),
                 self.voice_muted,
                 self.voice_deafened,
+                self.camera.active,
             );
         }
         cx.notify();
@@ -307,7 +349,7 @@ impl HomeScreen {
                 }
                 // Disconnected from the far end: the call is already over, so
                 // only the local side is torn down.
-                None => self.end_call_locally(),
+                None => self.end_call_locally(cx),
             }
         }
 
@@ -501,6 +543,7 @@ impl HomeScreen {
                 if !self.voice_cue_policy.accepts(attempt) {
                     return;
                 }
+                self.attach_camera_engine();
                 if let Some(cue) = self.voice_cue_policy.connected(attempt) {
                     self.voice_cues.play(cue);
                 }

@@ -14,7 +14,7 @@ use crate::discord;
 use crate::platform::capture::{self, CaptureSettings, CaptureSource};
 use crate::screens::home::HomeScreen;
 use crate::screens::home::voice::{ScreenShare, VoiceStatus};
-use crate::voice::stream::{GoLive, StreamConnection, StreamEvent};
+use crate::voice::stream::{AudioShare, GoLive, StreamConnection, StreamEvent};
 
 /// 720p at 30 frames a second: the most Discord shows of a stream from an
 /// account without Nitro, so sending more would only be scaled away.
@@ -41,6 +41,15 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.toggle_screen_share_with_audio(AudioShare::Off, window, cx);
+    }
+
+    pub(in crate::screens::home) fn toggle_screen_share_with_audio(
+        &mut self,
+        audio: AudioShare,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.screen_share.is_some() {
             self.stop_screen_share(cx);
             return;
@@ -57,14 +66,19 @@ impl HomeScreen {
             let Some(source) = pick.await else {
                 return;
             };
-            let _ = this.update(cx, |this, cx| this.start_screen_share(source, cx));
+            let _ = this.update(cx, |this, cx| this.start_screen_share(source, audio, cx));
         })
         .detach();
     }
 
     /// Announces the stream on the gateway, holding the source until the
     /// stream's server is known.
-    fn start_screen_share(&mut self, source: CaptureSource, cx: &mut Context<Self>) {
+    fn start_screen_share(
+        &mut self,
+        source: CaptureSource,
+        audio: AudioShare,
+        cx: &mut Context<Self>,
+    ) {
         // The call may have ended, or a stream started, while the picker was
         // open.
         if self.screen_share.is_some() || !self.can_share_screen() {
@@ -82,6 +96,7 @@ impl HomeScreen {
         gateway.set_stream_paused(&stream_key, false);
 
         self.screen_share = Some(ScreenShare {
+            audio,
             stream_key,
             source_name: source.name(),
             source: Some(source),
@@ -232,7 +247,7 @@ impl HomeScreen {
             return;
         };
 
-        share.stream = Some(GoLive::start(
+        share.stream = Some(GoLive::start_with_audio(
             StreamConnection {
                 stream_key: share.stream_key.clone(),
                 server_id,
@@ -244,6 +259,7 @@ impl HomeScreen {
             },
             source,
             STREAM_SETTINGS,
+            share.audio,
             events,
         ));
         cx.notify();

@@ -29,10 +29,22 @@ impl HomeScreen {
         participant: &VoiceParticipant,
         size: Size<Pixels>,
         cx: &Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let user_id = participant.user_id;
         let avatar_size = (size.height * 0.4).clamp(px(32.), px(TILE_AVATAR));
+        let picture = match self.camera_frame(user_id.get()) {
+            Some(frame) => img(frame)
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => avatar(
+                participant.name.clone(),
+                participant.avatar_url.clone(),
+                avatar_size,
+            )
+            .into_any_element(),
+        };
 
         let badge = name_badge(None, participant.name.clone())
             .when(participant.muted, |this| {
@@ -52,13 +64,9 @@ impl HomeScreen {
                 )
             });
 
-        tile(format!("voice-tile-{user_id}"), size, cx)
+        let tile = tile(format!("voice-tile-{user_id}"), size, cx)
             .when_some(participant.accent_color, |this, color| this.bg(rgb(color)))
-            .child(avatar(
-                participant.name.clone(),
-                participant.avatar_url.clone(),
-                avatar_size,
-            ))
+            .child(picture)
             .child(badge)
             // Drawn over the card's own edge rather than as a thicker one, so
             // starting to talk doesn't shift anything inside the tile.
@@ -71,7 +79,14 @@ impl HomeScreen {
                         .border_2()
                         .border_color(theme.success),
                 )
-            })
+            });
+        crate::screens::home::peer_audio::attach_peer_audio_context_menu(
+            tile,
+            user_id.get(),
+            participant.name.clone(),
+            participant.is_self,
+            cx,
+        )
     }
 
     /// The tile a live participant's stream gets beside their own: the way to

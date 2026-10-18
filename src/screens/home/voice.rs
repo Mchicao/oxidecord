@@ -14,7 +14,7 @@ use gpui::RenderImage;
 
 use crate::platform::capture::CaptureSource;
 use crate::platform::h264::DecoderEvent;
-use crate::voice::stream::{GoLive, WatchStream};
+use crate::voice::stream::{AudioShare, GoLive, WatchStream};
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
@@ -70,6 +70,7 @@ pub(super) struct VoiceCall {
 /// `STREAM_CREATE` carries the server id and `STREAM_SERVER_UPDATE` the
 /// server, in either order, so the source waits here until both have landed.
 pub(super) struct ScreenShare {
+    pub audio: AudioShare,
     /// Names the stream in every gateway command and dispatch about it.
     pub stream_key: String,
     /// The window title or display name, for the panel.

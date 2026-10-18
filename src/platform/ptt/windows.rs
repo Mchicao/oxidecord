@@ -13,7 +13,7 @@ use windows::Win32::UI::Input::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::w;
 
-use super::AudioControl;
+use super::{AudioControl, Hotkey, HotkeyAction, HotkeyState, Modifiers};
 
 const DESKTOP_CHANGED: u32 = WM_APP + 1;
 const REARM: u32 = WM_APP + 2;
@@ -33,13 +33,21 @@ impl Listener {
             }
         }
     }
-    pub fn start(control: Arc<AudioControl>, key: u16) -> Result<Self, String> {
+
+    pub fn start_with_hotkeys(
+        control: Arc<AudioControl>,
+        key: u16,
+        ptt_active: bool,
+        mute_hotkey: Hotkey,
+        deafen_hotkey: Hotkey,
+    ) -> Result<Self, String> {
         let (ready, result) = mpsc::sync_channel(1);
         let state = control.clone();
         let thread = std::thread::Builder::new()
             .name("voice-ptt".into())
             .spawn(move || {
-                let outcome = unsafe { listen(&state, key, &ready) };
+                let outcome =
+                    unsafe { listen(&state, key, ptt_active, mute_hotkey, deafen_hotkey, &ready) };
                 state.ptt_failed();
                 if let Err(error) = outcome {
                     let _ = ready.send(Err(format!(
@@ -95,6 +103,9 @@ unsafe extern "system" fn desktop_changed(
 unsafe fn listen(
     control: &AudioControl,
     key: u16,
+    ptt_active: bool,
+    mute_hotkey: Hotkey,
+    deafen_hotkey: Hotkey,
     ready: &mpsc::SyncSender<Result<u32, String>>,
 ) -> windows::core::Result<()> {
     unsafe {
@@ -138,9 +149,24 @@ unsafe fn listen(
                     size_of::<RAWINPUTDEVICE>() as u32,
                 )?;
                 registered = true;
-                control.ptt_ready(GetAsyncKeyState(i32::from(key)) < 0);
+
+                if ptt_active {
+                    control.ptt_ready(GetAsyncKeyState(i32::from(key)) < 0);
+                }
+
                 let mut input_since = GetTickCount64();
                 let mut healthy = true;
+
+                let mut lctrl = false;
+                let mut rctrl = false;
+                let mut lshift = false;
+                let mut rshift = false;
+                let mut lalt = false;
+                let mut ralt = false;
+
+                let mut mute_state = HotkeyState::new();
+                let mut deafen_state = HotkeyState::new();
+
                 let _ = ready.send(Ok(GetCurrentThreadId()));
                 let mut message = MSG::default();
                 loop {
@@ -169,14 +195,76 @@ unsafe fn listen(
                             {
                                 healthy = false;
                                 control.ptt_failed();
-                            } else if input.header.dwType == RIM_TYPEKEYBOARD.0
-                                && healthy
-                                && let Some(down) = key_transition(input.data.keyboard, key)
-                                && after_rearm(message.time, GetTickCount64(), input_since)
-                            {
-                                control.key_event(key, down);
+                            } else if input.header.dwType == RIM_TYPEKEYBOARD.0 && healthy {
+                                let keyboard = input.data.keyboard;
+                                let is_down = (u32::from(keyboard.Flags) & RI_KEY_BREAK) == 0;
+                                let extended = (u32::from(keyboard.Flags) & RI_KEY_E0) != 0;
+
+                                let canonical = match keyboard.VKey {
+                                    0x10 => {
+                                        if keyboard.MakeCode == 0x36 {
+                                            0xa1
+                                        } else {
+                                            0xa0
+                                        }
+                                    }
+                                    0x11 => {
+                                        if extended {
+                                            0xa3
+                                        } else {
+                                            0xa2
+                                        }
+                                    }
+                                    0x12 => {
+                                        if extended {
+                                            0xa5
+                                        } else {
+                                            0xa4
+                                        }
+                                    }
+                                    vk => vk,
+                                };
+
+                                match canonical {
+                                    0xa0 => lshift = is_down,
+                                    0xa1 => rshift = is_down,
+                                    0xa2 => lctrl = is_down,
+                                    0xa3 => rctrl = is_down,
+                                    0xa4 => lalt = is_down,
+                                    0xa5 => ralt = is_down,
+                                    _ => {}
+                                }
+
+                                let current_mods = Modifiers {
+                                    ctrl: lctrl || rctrl,
+                                    shift: lshift || rshift,
+                                    alt: lalt || ralt,
+                                };
+
+                                if after_rearm(message.time, GetTickCount64(), input_since) {
+                                    if ptt_active && canonical == key {
+                                        control.key_event(key, is_down);
+                                    }
+
+                                    if mute_state.key_event(
+                                        &mute_hotkey,
+                                        canonical,
+                                        is_down,
+                                        current_mods,
+                                    ) {
+                                        control.trigger_hotkey(HotkeyAction::ToggleMute);
+                                    }
+
+                                    if deafen_state.key_event(
+                                        &deafen_hotkey,
+                                        canonical,
+                                        is_down,
+                                        current_mods,
+                                    ) {
+                                        control.trigger_hotkey(HotkeyAction::ToggleDeafen);
+                                    }
+                                }
                             }
-                            // Foreground WM_INPUT requires DefWindowProc cleanup. No legacy key is suppressed.
                             DefWindowProcW(
                                 message.hwnd,
                                 message.message,
@@ -186,12 +274,32 @@ unsafe fn listen(
                         }
                         WM_INPUT_DEVICE_CHANGE | WM_WTSSESSION_CHANGE | DESKTOP_CHANGED => {
                             healthy = false;
-                            control.ptt_failed()
+                            control.ptt_failed();
+                            lctrl = false;
+                            rctrl = false;
+                            lshift = false;
+                            rshift = false;
+                            lalt = false;
+                            ralt = false;
+                            mute_state.reset();
+                            deafen_state.reset();
                         }
                         REARM => {
                             if healthy {
                                 input_since = GetTickCount64();
-                                control.ptt_ready(GetAsyncKeyState(i32::from(key)) < 0);
+                                lshift = GetAsyncKeyState(0xa0) < 0;
+                                rshift = GetAsyncKeyState(0xa1) < 0;
+                                lctrl = GetAsyncKeyState(0xa2) < 0;
+                                rctrl = GetAsyncKeyState(0xa3) < 0;
+                                lalt = GetAsyncKeyState(0xa4) < 0;
+                                ralt = GetAsyncKeyState(0xa5) < 0;
+                                mute_state.key_down = mute_hotkey.enabled
+                                    && GetAsyncKeyState(i32::from(mute_hotkey.key)) < 0;
+                                deafen_state.key_down = deafen_hotkey.enabled
+                                    && GetAsyncKeyState(i32::from(deafen_hotkey.key)) < 0;
+                                if ptt_active {
+                                    control.ptt_ready(GetAsyncKeyState(i32::from(key)) < 0);
+                                }
                             }
                         }
                         _ => {
@@ -221,6 +329,7 @@ unsafe fn listen(
     }
 }
 
+#[cfg(test)]
 fn key_transition(keyboard: RAWKEYBOARD, chosen: u16) -> Option<bool> {
     let extended = u32::from(keyboard.Flags) & RI_KEY_E0 != 0;
     let key = match keyboard.VKey {
@@ -291,5 +400,71 @@ mod tests {
             keyboard.Flags |= RI_KEY_BREAK as u16;
             assert_eq!(key_transition(keyboard, chosen), Some(false));
         }
+    }
+
+    #[test]
+    fn production_hotkey_state_tracks_held_key_in_windows_loop() {
+        let mute = Hotkey {
+            key: 0x4d, // 'M'
+            modifiers: Modifiers::CTRL_SHIFT,
+            enabled: true,
+        };
+
+        let mut state = HotkeyState::new();
+        let mut triggers = 0;
+
+        let mut lctrl = false;
+        let mut lshift = false;
+        let mut dispatch =
+            |canonical: u16, is_down: bool, state: &mut HotkeyState, triggers: &mut usize| {
+                match canonical {
+                    0xa0 => lshift = is_down,
+                    0xa2 => lctrl = is_down,
+                    _ => {}
+                }
+                let mods = Modifiers {
+                    ctrl: lctrl,
+                    shift: lshift,
+                    alt: false,
+                };
+                if state.key_event(&mute, canonical, is_down, mods) {
+                    *triggers += 1;
+                }
+            };
+
+        // 1. Modifiers down
+        dispatch(0xa2, true, &mut state, &mut triggers);
+        dispatch(0xa0, true, &mut state, &mut triggers);
+        assert_eq!(triggers, 0);
+
+        // 2. Press M down -> triggers once
+        dispatch(0x4d, true, &mut state, &mut triggers);
+        assert_eq!(triggers, 1);
+        assert!(state.key_down);
+
+        // 3. Auto-repeats of M while held -> no re-trigger
+        dispatch(0x4d, true, &mut state, &mut triggers);
+        dispatch(0x4d, true, &mut state, &mut triggers);
+        assert_eq!(triggers, 1);
+
+        // 4. Release Ctrl while M is held
+        dispatch(0xa2, false, &mut state, &mut triggers);
+        assert!(state.key_down);
+
+        // 5. Re-press Ctrl while M is held
+        dispatch(0xa2, true, &mut state, &mut triggers);
+        assert!(state.key_down);
+
+        // 6. Incoming auto-repeat of M after modifier re-press -> must NOT trigger
+        dispatch(0x4d, true, &mut state, &mut triggers);
+        assert_eq!(triggers, 1);
+
+        // 7. Keyup of M
+        dispatch(0x4d, false, &mut state, &mut triggers);
+        assert!(!state.key_down);
+
+        // 8. Subsequent press with Ctrl+Shift still held -> triggers second time
+        dispatch(0x4d, true, &mut state, &mut triggers);
+        assert_eq!(triggers, 2);
     }
 }

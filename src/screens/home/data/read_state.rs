@@ -25,7 +25,8 @@ impl HomeScreen {
         let Some(channel_id) = self.selected_channel else {
             return;
         };
-        if self.messages_loading
+        if !self.inbox.window_active
+            || self.messages_loading
             || self.messages_error.is_some()
             || !self.at_bottom
             || !self.reached_newest
@@ -51,6 +52,7 @@ impl HomeScreen {
         if !self.unreads.ack(channel_id, message_id) {
             return;
         }
+        self.rebuild_inbox_unreads(cx);
         cx.notify();
         self.pending_acks.insert(channel_id, message_id);
         if self.ack_flush.is_some() {
@@ -92,6 +94,7 @@ impl HomeScreen {
             self.unreads.note_latest(channel_id, newest);
         }
         self.unreads.set_acked(channel_id, before);
+        self.rebuild_inbox_unreads(cx);
         self.pending_acks.remove(&channel_id);
         self.marked_unread = true;
         self.set_unread_marker(Some(before));

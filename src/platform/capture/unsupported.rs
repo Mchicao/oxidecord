@@ -1,7 +1,7 @@
 //! Fallback for platforms without a capture backend yet. ScreenCaptureKit on
 //! macOS and PipeWire's portal on Linux would fit the same shape.
 
-use futures::channel::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use super::{CaptureEvent, CaptureSettings, Control};
 
@@ -28,7 +28,9 @@ pub(super) fn capture(
     _source: CaptureSource,
     _settings: CaptureSettings,
     _control: &Control,
-    _events: &UnboundedSender<CaptureEvent>,
+    _events: &Sender<CaptureEvent>,
+    _awakened: std::sync::mpsc::Receiver<()>,
+    _clock: super::clock::MediaClock,
 ) -> Result<(), String> {
     Err("Screen sharing isn't supported on this platform".into())
 }

@@ -1,33 +1,25 @@
 //! Voice calls: the connection to Discord's voice servers and the audio that
 //! travels over it.
 //!
-//! The websocket handshake, UDP transport, encryption, and Opus coding are
-//! songbird's; this module supplies the parameters the gateway hands back,
-//! wires the microphone and speakers to it ([`audio`]), and reports back what
-//! the UI needs to draw.
+//! [`stream::CallMedia`] owns the primary websocket, UDP transport and DAVE
+//! session. [`audio`] owns devices, processing, Opus coding and playback.
 //!
 //! Everything here runs on the shared Tokio runtime. [`VoiceEngine`] is the
 //! only handle the rest of the app holds: commands go down a channel, events
-//! come back up another, so no songbird type crosses into gpui's thread.
+//! come back up another, so media and device types stay off gpui's thread.
 //!
-//! Screen sharing is a separate connection with its own server, in
-//! [`stream`]: songbird has no way to send video, so that one is spoken
-//! directly.
+//! Camera uses the primary call connection; screen sharing uses its own
+//! stream server and media connection in [`stream`].
 
 mod audio;
 pub mod cues;
+pub mod peer_settings;
 pub mod stream;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use songbird::driver::{DecodeMode, Driver};
-use songbird::events::{CoreEvent, Event, EventContext, EventHandler};
-use songbird::id::{ChannelId, GuildId, UserId};
-use songbird::tracks::TrackHandle;
-use songbird::{Config, ConnectionInfo, error::ConnectionError};
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
@@ -82,6 +74,7 @@ pub enum VoiceEvent {
 pub struct VoiceEngine {
     commands: UnboundedSender<Command>,
     settings: AudioSettings,
+    transport: Arc<Mutex<Option<Arc<stream::CallMedia>>>>,
 }
 
 enum Command {
@@ -95,6 +88,22 @@ enum Command {
     InputDevice(Option<String>),
     /// Switch to another speaker, by the id [`output_devices`] reported.
     OutputDevice(Option<String>),
+    Camera(Option<stream::VideoDescription>),
+    CameraEvents(tokio::sync::mpsc::Sender<CameraVoiceEvent>),
+    StreamAudio(tokio::sync::mpsc::Receiver<stream::RemoteAudio>),
+}
+
+pub enum CameraVoiceEvent {
+    Frame {
+        user_id: u64,
+        frame: crate::platform::capture::EncodedFrame,
+    },
+    State {
+        user_id: u64,
+        active: bool,
+    },
+    KeyframeRequested,
+    Ended,
 }
 
 impl VoiceEngine {
@@ -107,8 +116,13 @@ impl VoiceEngine {
             Some(events.clone()),
             Some(commands.clone()),
         );
-        runtime::handle().spawn(run(rx, events, settings.control.clone()));
-        Self { commands, settings }
+        let transport = Arc::new(Mutex::new(None));
+        runtime::handle().spawn(run(rx, events, settings.control.clone(), transport.clone()));
+        Self {
+            commands,
+            settings,
+            transport,
+        }
     }
 
     pub fn connect(&self, connection: VoiceConnection) {
@@ -117,6 +131,11 @@ impl VoiceEngine {
     }
 
     pub fn disconnect(&self) {
+        if let Ok(transport) = self.transport.lock()
+            && let Some(media) = transport.as_ref()
+        {
+            media.set_flags(stream::CallMediaFlags::default());
+        }
         self.settings.control.begin_session();
         self.send(Command::Disconnect);
     }
@@ -125,6 +144,12 @@ impl VoiceEngine {
         self.settings
             .control
             .set_voice_flags(muted, deafened, restricted);
+        if (muted || deafened || restricted)
+            && let Ok(transport) = self.transport.lock()
+            && let Some(media) = transport.as_ref()
+        {
+            media.invalidate_audio();
+        }
         self.send(Command::Deafen(deafened));
         self.send(Command::Gate);
     }
@@ -132,6 +157,11 @@ impl VoiceEngine {
     /// Picks the microphone to send, taking effect immediately if a call is
     /// already up. `None` follows the system default.
     pub fn set_input_device(&self, device: Option<String>) {
+        if let Ok(transport) = self.transport.lock()
+            && let Some(media) = transport.as_ref()
+        {
+            media.invalidate_audio();
+        }
         self.send(Command::InputDevice(device));
     }
 
@@ -157,6 +187,46 @@ impl VoiceEngine {
 
     pub fn set_server_restricted(&self, restricted: bool) {
         self.settings.control.set_server_restricted(restricted);
+        self.send(Command::Gate);
+    }
+
+    pub fn stream_audio(&self) -> tokio::sync::mpsc::Sender<stream::RemoteAudio> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        self.send(Command::StreamAudio(rx));
+        tx
+    }
+
+    pub fn set_camera_events(&self, events: tokio::sync::mpsc::Sender<CameraVoiceEvent>) {
+        self.send(Command::CameraEvents(events));
+    }
+    pub fn set_camera(&self, description: Option<stream::VideoDescription>) {
+        self.send(Command::Camera(description));
+    }
+    pub fn camera_clock(&self) -> Option<crate::platform::capture::clock::MediaClock> {
+        self.transport
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|media| media.clock())
+    }
+    pub fn send_camera_frame(
+        &self,
+        frame: crate::platform::capture::EncodedFrame,
+    ) -> Result<(), crate::platform::capture::EncodedFrame> {
+        match self.transport.lock() {
+            Ok(transport) => match transport.as_ref() {
+                Some(media) => media.send_frame(frame),
+                None => Err(frame),
+            },
+            Err(_) => Err(frame),
+        }
+    }
+    pub fn request_video_keyframe(&self, user_id: u64) {
+        if let Ok(transport) = self.transport.lock()
+            && let Some(media) = transport.as_ref()
+        {
+            media.request_keyframe(user_id);
+        }
     }
 }
 
@@ -167,121 +237,231 @@ impl Drop for VoiceEngine {
     }
 }
 
-/// The call as the engine task holds it: songbird's driver and the audio
-/// devices feeding it. Dropping it ends the call.
-struct Call {
-    driver: Driver,
-    audio: SharedAudio,
-    /// The microphone, playing into the call as a track like any other. Held
-    /// so it can be stopped and replaced when the device changes.
-    mic: TrackHandle,
-}
-
-impl Call {
-    fn update_transmission(&mut self) {
-        let open = self.audio.lock().is_ok_and(|audio| audio.can_transmit());
-        self.driver.mute(!open);
-    }
-}
-
-impl Drop for Call {
-    fn drop(&mut self) {
-        // The driver's event handlers hold the devices too, and outlive it by
-        // however long its shutdown takes, so the devices are closed here
-        // rather than when the last handle goes.
-        if let Ok(audio) = self.audio.lock() {
-            audio.capture.control.end_session(audio.capture.session);
-            audio.stop();
-        }
-    }
-}
-
-/// The call's audio devices, as everything that touches them holds them.
-///
-/// Switching microphone reopens both devices, and the driver's tick handler
-/// has to reach whichever pair is current — its own clone would otherwise go
-/// on filling a closed one, and playback would stop at the first switch.
-type SharedAudio = Arc<Mutex<Arc<AudioIo>>>;
-
-/// Who owns which RTP stream, and who was audible on the last tick.
-///
-/// Packets identify their sender by SSRC only; the mapping to a user arrives
-/// separately, in the voice websocket's speaking updates.
-#[derive(Default)]
-struct Speakers {
-    users: HashMap<u32, Id<UserMarker>>,
-    audible: HashSet<Id<UserMarker>>,
-}
-
 async fn run(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<VoiceEvent>,
     control: Arc<audio::settings::AudioControl>,
+    transport: Arc<Mutex<Option<Arc<stream::CallMedia>>>>,
 ) {
     use futures::StreamExt as _;
 
-    let mut call: Option<Call> = None;
+    let mut call: Option<NativeCall> = None;
     let mut deafened = false;
     let mut input_device: Option<String> = None;
     let mut output_device: Option<String> = None;
 
-    while let Some(command) = commands.next().await {
-        match command {
-            Command::Connect(connection, session) => {
-                let attempt = connection.attempt;
-                // Only one call at a time: leaving the old one first stops its
-                // devices before the new one opens them.
-                call = None;
-
-                match connect(
-                    *connection,
-                    events.clone(),
-                    deafened,
-                    (input_device.as_deref(), output_device.as_deref()),
-                    control.clone(),
-                    session,
-                )
-                .await
-                {
-                    Ok(new) => {
-                        call = Some(new);
-                        let _ = events.unbounded_send(VoiceEvent::Connected { attempt });
+    let mut camera_events: Option<tokio::sync::mpsc::Sender<CameraVoiceEvent>> = None;
+    let mut screen_audio: Option<tokio::sync::mpsc::Receiver<stream::RemoteAudio>> = None;
+    loop {
+        enum Next {
+            Command(Option<Command>),
+            Media(Option<stream::CallMediaEvent>),
+            Mic(Option<audio::transmit::TransmitEvent>),
+            Screen(Option<stream::RemoteAudio>),
+        }
+        let next = tokio::select! {
+            biased;
+            command = commands.next() => Next::Command(command),
+            event = async { match call.as_mut() {
+                Some(call) => tokio::select! {
+                    event = call.events.recv() => Next::Media(event),
+                    event = call.mic_events.recv() => Next::Mic(event),
+                },
+                None => std::future::pending().await,
+            } } => event,
+            packet = async { match screen_audio.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => Next::Screen(packet),
+        };
+        let command = match next {
+            Next::Command(Some(command)) => command,
+            Next::Command(None) => break,
+            Next::Screen(packet) => {
+                if let Some(call) = &mut call {
+                    if let Some(packet) = packet {
+                        call.receive(packet, true);
+                    } else {
+                        call.forget_screen();
+                        screen_audio = None;
                     }
-                    Err(error) => {
-                        let _ = events.unbounded_send(VoiceEvent::Failed {
-                            attempt,
-                            error: error.to_string(),
+                } else {
+                    screen_audio = None;
+                }
+                continue;
+            }
+            Next::Mic(event) => {
+                let ended = matches!(
+                    event,
+                    None | Some(audio::transmit::TransmitEvent::Failed(_))
+                );
+                if let Some(call) = &mut call {
+                    match event {
+                        Some(audio::transmit::TransmitEvent::Speaking(speaking)) => {
+                            call.update_transmission(deafened);
+                            report_speaking(&mut call.speaking, call.user_id, speaking, &events);
+                        }
+                        Some(audio::transmit::TransmitEvent::Failed(error)) => {
+                            let _ = events.unbounded_send(VoiceEvent::Failed {
+                                attempt: call.attempt,
+                                error,
+                            });
+                            if let Ok(mut current) = transport.lock() {
+                                *current = None;
+                            }
+                            call.media.set_flags(stream::CallMediaFlags::default());
+                            call.audio.stop();
+                        }
+                        None => {}
+                    }
+                }
+                if ended {
+                    if let Ok(mut current) = transport.lock() {
+                        *current = None;
+                    }
+                    call = None;
+                    screen_audio = None;
+                    if let Some(tx) = &camera_events {
+                        let _ = tx.try_send(CameraVoiceEvent::Ended);
+                    }
+                }
+                continue;
+            }
+            Next::Media(event) => {
+                let Some(current) = &mut call else {
+                    continue;
+                };
+                let mut ended = false;
+                match event {
+                    Some(stream::CallMediaEvent::Connected) => {
+                        control.activate_session(current.session);
+                        current.update_transmission(deafened);
+                        let _ = events.unbounded_send(VoiceEvent::Connected {
+                            attempt: current.attempt,
                         });
                     }
+                    Some(stream::CallMediaEvent::RemoteAudio(packet)) => {
+                        current.receive(packet, false)
+                    }
+                    Some(stream::CallMediaEvent::Speaking { user_id, speaking }) => {
+                        report_speaking(&mut current.speaking, user_id, speaking, &events)
+                    }
+                    Some(stream::CallMediaEvent::UserLeft { user_id }) => {
+                        report_speaking(&mut current.speaking, user_id, false, &events);
+                        current.forget_user(user_id);
+                        if let Some(tx) = &camera_events {
+                            let _ = tx.try_send(CameraVoiceEvent::State {
+                                user_id,
+                                active: false,
+                            });
+                        }
+                    }
+                    Some(stream::CallMediaEvent::RemoteVideo { user_id, frame }) => {
+                        if current.video_dropped.contains(&user_id) && !frame.keyframe {
+                            continue;
+                        }
+                        if let Some(tx) = &camera_events {
+                            if tx
+                                .try_send(CameraVoiceEvent::Frame { user_id, frame })
+                                .is_err()
+                            {
+                                if current.video_dropped.insert(user_id) {
+                                    current.media.request_keyframe(user_id);
+                                }
+                            } else {
+                                current.video_dropped.remove(&user_id);
+                            }
+                        }
+                    }
+                    Some(stream::CallMediaEvent::VideoState { user_id, active }) => {
+                        if let Some(tx) = &camera_events {
+                            let _ = tx.try_send(CameraVoiceEvent::State { user_id, active });
+                        }
+                    }
+                    Some(stream::CallMediaEvent::KeyframeRequested) => {
+                        if let Some(tx) = &camera_events {
+                            let _ = tx.try_send(CameraVoiceEvent::KeyframeRequested);
+                        }
+                    }
+                    Some(stream::CallMediaEvent::Reconnecting) => {
+                        current.transmitter.set_open(false);
+                        current.media.invalidate_audio();
+                        current.audio.forget_all();
+                    }
+                    Some(stream::CallMediaEvent::Disconnected { error }) => {
+                        if let Some(error) = error {
+                            let _ = events.unbounded_send(VoiceEvent::Failed {
+                                attempt: current.attempt,
+                                error,
+                            });
+                        } else {
+                            let _ = events.unbounded_send(VoiceEvent::Disconnected {
+                                attempt: current.attempt,
+                            });
+                        }
+                        ended = true;
+                    }
+                    None => {
+                        ended = true;
+                    }
                 }
+                if ended {
+                    if let Ok(mut current) = transport.lock() {
+                        *current = None;
+                    }
+                    call = None;
+                    screen_audio = None;
+                    if let Some(tx) = &camera_events {
+                        let _ = tx.try_send(CameraVoiceEvent::Ended);
+                    }
+                }
+                continue;
+            }
+        };
+        match command {
+            Command::Connect(connection, session) => {
+                // Only one call at a time: leaving the old one first stops its
+                // devices before the new one opens them.
+                drop(call.take());
+                screen_audio = None;
+                let new = NativeCall::start(
+                    *connection,
+                    control.clone(),
+                    session,
+                    input_device.as_deref(),
+                    output_device.as_deref(),
+                    deafened,
+                );
+                if let Ok(mut current) = transport.lock() {
+                    *current = Some(new.media.clone());
+                }
+                call = Some(new);
             }
             Command::Disconnect => {
-                if let Some(call) = &mut call {
-                    call.driver.leave();
+                if let Ok(mut current) = transport.lock() {
+                    *current = None;
                 }
                 call = None;
+                screen_audio = None;
+                if let Some(tx) = &camera_events {
+                    let _ = tx.try_send(CameraVoiceEvent::Ended);
+                }
             }
             Command::Gate => {
                 if let Some(call) = &mut call {
-                    call.update_transmission();
+                    call.update_transmission(deafened);
                 }
             }
             Command::Processing => {
                 if let Some(call) = &mut call {
-                    if let Ok(audio) = call.audio.lock() {
-                        audio.configure_processing();
-                    }
-                    call.update_transmission();
+                    call.media.invalidate_audio();
+                    call.audio.configure_processing();
+                    call.update_transmission(deafened);
                 }
             }
             Command::Shutdown => break,
             Command::Deafen(value) => {
                 deafened = value;
                 if let Some(call) = &mut call {
-                    if let Ok(audio) = call.audio.lock() {
-                        audio.set_playback_deafened(value);
-                    }
-                    call.update_transmission();
+                    call.audio.set_playback_deafened(value);
+                    call.update_transmission(deafened);
                 }
             }
             Command::InputDevice(device) => {
@@ -290,8 +470,7 @@ async fn run(
                 if input_device != device {
                     input_device = device;
                     if let Some(call) = &mut call {
-                        swap_devices(
-                            call,
+                        call.swap_devices(
                             input_device.as_deref(),
                             output_device.as_deref(),
                             deafened,
@@ -303,8 +482,7 @@ async fn run(
                 if output_device != device {
                     output_device = device;
                     if let Some(call) = &mut call {
-                        swap_devices(
-                            call,
+                        call.swap_devices(
                             input_device.as_deref(),
                             output_device.as_deref(),
                             deafened,
@@ -312,296 +490,179 @@ async fn run(
                     }
                 }
             }
+            Command::Camera(video) => {
+                if let Some(call) = &mut call {
+                    call.video = video;
+                    call.update_transmission(deafened);
+                }
+            }
+            Command::CameraEvents(events) => camera_events = Some(events),
+            Command::StreamAudio(receiver) => {
+                if let Some(call) = &mut call {
+                    call.forget_screen();
+                }
+                screen_audio = Some(receiver);
+            }
         }
+    }
+    if let Ok(mut current) = transport.lock() {
+        *current = None;
     }
 }
 
-async fn connect(
-    connection: VoiceConnection,
-    events: UnboundedSender<VoiceEvent>,
-    deafened: bool,
-    devices: (Option<&str>, Option<&str>),
-    control: Arc<audio::settings::AudioControl>,
+struct NativeCall {
+    attempt: u64,
     session: u64,
-) -> Result<Call, ConnectionError> {
-    // Decryption is off by default, since a bot usually only sends. Decoding
-    // stays off: packets are decoded in `audio`, for the reasons given there.
-    let config = Config::default().decode_mode(DecodeMode::Decrypt);
-    let mut driver = Driver::new(config);
-
-    let audio = Arc::new(AudioIo::start(
-        devices.0,
-        devices.1,
-        control.clone(),
-        session,
-    ));
-    audio.set_playback_deafened(deafened);
-    let mic_input = audio.mic_input();
-    let audio: SharedAudio = Arc::new(Mutex::new(audio));
-    let speakers = Arc::new(Mutex::new(Speakers::default()));
-
-    driver.add_global_event(
-        Event::Core(CoreEvent::SpeakingStateUpdate),
-        SpeakingHandler {
-            speakers: speakers.clone(),
-        },
-    );
-    driver.add_global_event(
-        Event::Core(CoreEvent::ClientDisconnect),
-        DisconnectHandler {
-            audio: audio.clone(),
-            speakers: speakers.clone(),
-        },
-    );
-    driver.add_global_event(
-        Event::Core(CoreEvent::RtpPacket),
-        PacketHandler {
-            audio: audio.clone(),
-        },
-    );
-    driver.add_global_event(
-        Event::Core(CoreEvent::VoiceTick),
-        TickHandler {
-            audio: audio.clone(),
-            local_user: connection.user_id,
-            speakers: speakers.clone(),
-            events: events.clone(),
-        },
-    );
-    driver.add_global_event(
-        Event::Core(CoreEvent::DriverDisconnect),
-        DriverDisconnectHandler {
-            events: events.clone(),
-            attempt: connection.attempt,
-            control: control.clone(),
-            session,
-        },
-    );
-
-    driver.connect(info(&connection)).await?;
-    control.activate_session(session);
-
-    driver.mute(true);
-    // The microphone plays into the call like any other track, and never ends.
-    let mic = driver.play_input(mic_input);
-
-    Ok(Call { driver, audio, mic })
+    user_id: u64,
+    audio: Arc<AudioIo>,
+    media: Arc<stream::CallMedia>,
+    events: tokio::sync::mpsc::Receiver<stream::CallMediaEvent>,
+    mic_events: tokio::sync::mpsc::Receiver<audio::transmit::TransmitEvent>,
+    transmitter: audio::transmit::Transmitter,
+    video: Option<stream::VideoDescription>,
+    video_dropped: HashSet<u64>,
+    streams: HashMap<(bool, u32), (u32, u64)>,
+    next_stream: u32,
+    speaking: HashSet<Id<UserMarker>>,
 }
 
-/// Reopens the devices on another microphone, speaker, or both, and hands the
-/// call the new pair.
-///
-/// The old track can't simply be repointed: it declared the old device's
-/// sample rate to the mixer, and the new device rarely runs at the same one.
-/// The speakers are reopened with it, so one command covers both directions
-/// and they can't disagree about the mixer. The restart is heard as a local
-/// interruption of playback, and the senders' decoders lose their buffered
-/// and decoded audio — only when the user switches, and simpler than
-/// rebuilding half of the audio thread underneath a live track.
-fn swap_devices(
-    call: &mut Call,
-    input_device: Option<&str>,
-    output_device: Option<&str>,
-    deafened: bool,
+impl NativeCall {
+    fn start(
+        connection: VoiceConnection,
+        control: Arc<AudioControl>,
+        session: u64,
+        input: Option<&str>,
+        output: Option<&str>,
+        deafened: bool,
+    ) -> Self {
+        let attempt = connection.attempt;
+        let user_id = connection.user_id.get();
+        let audio = Arc::new(AudioIo::start(input, output, control, session));
+        audio.set_playback_deafened(deafened);
+        let (tx, events) = tokio::sync::mpsc::channel(64);
+        let media = Arc::new(stream::CallMedia::start(connection, tx));
+        let captured = audio.clone();
+        media.set_audio_validator(Arc::new(move |epoch| captured.accepts_capture_epoch(epoch)));
+        let (tx, mic_events) = tokio::sync::mpsc::channel(4);
+        let transmitter = audio::transmit::Transmitter::start(audio.clone(), media.clone(), tx);
+        Self {
+            attempt,
+            session,
+            user_id,
+            audio,
+            media,
+            events,
+            mic_events,
+            transmitter,
+            video: None,
+            video_dropped: HashSet::new(),
+            streams: HashMap::new(),
+            next_stream: 1,
+            speaking: HashSet::new(),
+        }
+    }
+
+    fn update_transmission(&mut self, deafened: bool) {
+        let open = self.audio.can_transmit();
+        self.media.set_flags(stream::CallMediaFlags {
+            microphone: open,
+            speaking: self.audio.is_speaking(),
+            deafened,
+            video: self.video,
+        });
+        self.transmitter.set_open(open && !deafened);
+    }
+
+    fn swap_devices(&mut self, input: Option<&str>, output: Option<&str>, deafened: bool) {
+        self.media.invalidate_audio();
+        self.transmitter.set_open(false);
+        self.audio.capture.control.invalidate_capture();
+        self.audio.stop();
+        self.audio = Arc::new(AudioIo::start(
+            input,
+            output,
+            self.audio.capture.control.clone(),
+            self.session,
+        ));
+        self.audio.set_playback_deafened(deafened);
+        let captured = self.audio.clone();
+        self.media
+            .set_audio_validator(Arc::new(move |epoch| captured.accepts_capture_epoch(epoch)));
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        self.transmitter =
+            audio::transmit::Transmitter::start(self.audio.clone(), self.media.clone(), tx);
+        self.mic_events = rx;
+        self.streams.clear();
+        self.update_transmission(deafened);
+    }
+
+    fn receive(&mut self, packet: stream::RemoteAudio, screen: bool) {
+        let key = (screen, packet.ssrc);
+        if self
+            .streams
+            .get(&key)
+            .is_some_and(|(_, user)| *user != packet.user_id)
+            && let Some((id, _)) = self.streams.remove(&key)
+        {
+            self.audio.forget(id);
+        }
+        if !self.streams.contains_key(&key) {
+            if self.streams.len() >= 512 {
+                return;
+            }
+            self.next_stream = self.next_stream.wrapping_add(1).max(1);
+            self.streams.insert(key, (self.next_stream, packet.user_id));
+        }
+        if let Some(&(id, user)) = self.streams.get(&key) {
+            self.audio
+                .receive_from(user, id, packet.sequence, &packet.opus);
+        }
+    }
+
+    fn forget_screen(&mut self) {
+        self.streams.retain(|&(screen, _), value| {
+            let (id, _) = *value;
+            if screen {
+                self.audio.forget(id);
+            }
+            !screen
+        });
+    }
+
+    fn forget_user(&mut self, user_id: u64) {
+        self.streams.retain(|_, value| {
+            let (id, user) = *value;
+            if user == user_id {
+                self.audio.forget(id);
+            }
+            user != user_id
+        });
+    }
+}
+
+fn report_speaking(
+    users: &mut HashSet<Id<UserMarker>>,
+    user_id: u64,
+    speaking: bool,
+    events: &UnboundedSender<VoiceEvent>,
 ) {
-    let Ok(mut current) = call.audio.lock() else {
+    let Some(id) = Id::new_checked(user_id) else {
         return;
     };
-    current.capture.control.invalidate_capture();
-
-    let audio = Arc::new(AudioIo::start(
-        input_device,
-        output_device,
-        current.capture.control.clone(),
-        current.capture.session,
-    ));
-    audio.set_playback_deafened(deafened);
-    let mic_input = audio.mic_input();
-
-    let _ = call.mic.stop();
-    // Keep the old pair until its replacement has been handed to the audio thread.
-    current.stop();
-    *current = audio;
-    drop(current);
-
-    call.mic = call.driver.play_input(mic_input);
-}
-
-/// Songbird's connection parameters.
-///
-/// `guild_id` is only ever sent on as the voice server's `server_id`, which for
-/// a DM call is the channel's own id — so a guildless call substitutes it and
-/// connects the same way.
-fn info(connection: &VoiceConnection) -> ConnectionInfo {
-    // songbird is built against a different twilight release, so its id
-    // conversions don't apply to this crate's ids; the raw value is the only
-    // thing they have in common.
-    ConnectionInfo {
-        channel_id: ChannelId::from(connection.channel_id.into_nonzero()),
-        endpoint: connection.endpoint.clone(),
-        guild_id: GuildId::from(
-            connection
-                .guild_id
-                .map_or(connection.channel_id.into_nonzero(), |id| id.into_nonzero()),
-        ),
-        session_id: connection.session_id.clone(),
-        token: connection.token.clone(),
-        user_id: UserId::from(connection.user_id.into_nonzero()),
+    let changed = if speaking {
+        users.insert(id)
+    } else {
+        users.remove(&id)
+    };
+    if changed {
+        let _ = events.unbounded_send(VoiceEvent::Speaking(users.clone()));
     }
 }
 
-/// Learns which user an RTP stream belongs to.
-struct SpeakingHandler {
-    speakers: Arc<Mutex<Speakers>>,
-}
-
-#[async_trait]
-impl EventHandler for SpeakingHandler {
-    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        if let EventContext::SpeakingStateUpdate(speaking) = ctx
-            && let Some(user_id) = speaking.user_id
-            && let Ok(mut speakers) = self.speakers.lock()
-            && let Some(id) = Id::new_checked(user_id.0)
-        {
-            speakers.users.insert(speaking.ssrc, id);
-        }
-        None
-    }
-}
-
-/// Forgets a user's stream when they leave the call.
-struct DisconnectHandler {
-    audio: SharedAudio,
-    speakers: Arc<Mutex<Speakers>>,
-}
-
-#[async_trait]
-impl EventHandler for DisconnectHandler {
-    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        let EventContext::ClientDisconnect(disconnect) = ctx else {
-            return None;
-        };
-        let gone = Id::new_checked(disconnect.user_id.0)?;
-
-        let streams: Vec<u32> = match self.speakers.lock() {
-            Ok(mut speakers) => {
-                speakers.audible.remove(&gone);
-                let streams = speakers
-                    .users
-                    .iter()
-                    .filter(|(_, id)| **id == gone)
-                    .map(|(ssrc, _)| *ssrc)
-                    .collect();
-                speakers.users.retain(|_, id| *id != gone);
-                streams
-            }
-            Err(_) => return None,
-        };
-
-        if let Ok(audio) = self.audio.lock() {
-            for ssrc in streams {
-                audio.forget(ssrc);
-            }
-        }
-        None
-    }
-}
-
-/// Hands every packet to the speakers the moment it arrives.
-///
-/// By now songbird has taken off both the transport encryption and DAVE's,
-/// and the offsets it reports step over the header extension, the DAVE
-/// trailer, and any RTP padding, leaving the Opus frame alone.
-struct PacketHandler {
-    audio: SharedAudio,
-}
-
-#[async_trait]
-impl EventHandler for PacketHandler {
-    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        let EventContext::RtpPacket(packet) = ctx else {
-            return None;
-        };
-
-        // The fixed RTP header, then four bytes per contributing source; the
-        // offsets songbird reports count from the end of those.
-        let raw = &packet.packet[..];
-        let header = 12 + 4 * usize::from(*raw.first()? & 0x0f);
-        let sequence = u16::from_be_bytes([*raw.get(2)?, *raw.get(3)?]);
-        let ssrc = u32::from_be_bytes(raw.get(8..12)?.try_into().ok()?);
-        let payload = raw.get(header..)?;
-        let end = payload.len().checked_sub(packet.payload_end_pad)?;
-        let opus = payload.get(packet.payload_offset..end)?;
-
-        if let Ok(audio) = self.audio.lock() {
-            audio.receive(ssrc, sequence, opus);
-        }
-        None
-    }
-}
-
-/// One 20ms tick of the call: who was heard in it, for the tiles.
-struct TickHandler {
-    audio: SharedAudio,
-    local_user: Id<UserMarker>,
-    speakers: Arc<Mutex<Speakers>>,
-    events: UnboundedSender<VoiceEvent>,
-}
-
-#[async_trait]
-impl EventHandler for TickHandler {
-    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        let EventContext::VoiceTick(tick) = ctx else {
-            return None;
-        };
-
-        self.update_speaking(tick.speaking.keys().copied());
-        None
-    }
-}
-
-impl TickHandler {
-    fn update_speaking(&self, streams: impl Iterator<Item = u32>) {
-        let mut audible: HashSet<_> = match self.speakers.lock() {
-            Ok(speakers) => streams
-                .filter_map(|ssrc| speakers.users.get(&ssrc).copied())
-                .collect(),
-            Err(_) => return,
-        };
-
-        audible.remove(&self.local_user);
-        if let Ok(audio) = self.audio.lock()
-            && audio.is_speaking()
-        {
-            audible.insert(self.local_user);
-        }
-
-        // Tiles only repaint when the set changes; at 50 ticks a second,
-        // sending every one would repaint the call for no reason.
-        if let Ok(mut speakers) = self.speakers.lock()
-            && speakers.audible != audible
-        {
-            speakers.audible.clone_from(&audible);
-            let _ = self.events.unbounded_send(VoiceEvent::Speaking(audible));
-        }
-    }
-}
-
-/// Reports a call that ended without the user asking.
-struct DriverDisconnectHandler {
-    control: Arc<audio::settings::AudioControl>,
-    session: u64,
-    events: UnboundedSender<VoiceEvent>,
-    attempt: u64,
-}
-
-#[async_trait]
-impl EventHandler for DriverDisconnectHandler {
-    async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        self.control.end_session(self.session);
-        let _ = self.events.unbounded_send(VoiceEvent::Disconnected {
-            attempt: self.attempt,
-        });
-        None
+impl Drop for NativeCall {
+    fn drop(&mut self) {
+        self.transmitter.set_open(false);
+        self.media.set_flags(stream::CallMediaFlags::default());
+        self.audio.end_call();
     }
 }

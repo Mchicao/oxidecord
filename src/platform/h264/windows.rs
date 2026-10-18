@@ -7,8 +7,7 @@
 //! does. Output is NV12, converted to BGRA on the way out ([`super::Nv12`]).
 
 use std::mem::ManuallyDrop;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::sync::mpsc::Receiver;
 
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
@@ -17,10 +16,6 @@ use windows::Win32::System::Com::{
 use windows::core::Interface as _;
 
 use super::{ColorSpace, Control, DecodedFrame, DecoderEvent, Nv12, fit};
-
-/// How often the thread looks up from an idle stream to check it's still
-/// wanted.
-const POLL: Duration = Duration::from_millis(200);
 
 /// A nominal frame duration, in 100ns units. The decoder wants timestamps
 /// that move forward; what they are doesn't matter when nothing is paced.
@@ -36,9 +31,8 @@ pub(super) fn run(
     let mut time = 0;
 
     loop {
-        let frame = match input.recv_timeout(POLL) {
+        let frame = match input.recv() {
             Ok(frame) => frame,
-            Err(RecvTimeoutError::Timeout) if !control.is_stopped() => continue,
             Err(_) => return Ok(()),
         };
         if control.is_stopped() {

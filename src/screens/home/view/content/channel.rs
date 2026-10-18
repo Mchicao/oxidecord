@@ -31,6 +31,9 @@ impl HomeScreen {
         if channel.kind.is_voice() {
             return pane.child(self.render_voice_stage(cx)).into_any_element();
         }
+        if channel.kind == crate::discord::ChannelKind::Forum || self.threads_open {
+            return pane.child(self.render_threads_panel(cx)).into_any_element();
+        }
 
         // The member list runs from under the header to the bottom of the
         // pane, beside the messages and the composer both.
@@ -39,7 +42,7 @@ impl HomeScreen {
             .h_full()
             .min_w_0()
             .child(self.render_messages(cx))
-            .child(self.render_message_bar(channel.can_send, cx));
+            .child(self.render_message_bar(self.can_send_to_selected(), cx));
 
         pane.child(
             h_flex()
@@ -101,6 +104,25 @@ impl HomeScreen {
                                 "Hide Member List"
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_member_list(cx))),
+                    )
+                    .child(self.render_inbox_button(cx))
+                    .child(
+                        Button::new("channel-pins")
+                            .icon(Icon::default().path("icons/pin.svg"))
+                            .small()
+                            .ghost()
+                            .tooltip("Pinned Messages")
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_pin_panel(cx))),
+                    )
+                    .child(
+                        Button::new("channel-threads")
+                            .icon(Icon::default().path("icons/messages-square.svg"))
+                            .small()
+                            .ghost()
+                            .tooltip("Threads")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_threads_panel(window, cx)
+                            })),
                     )
                     .child(self.render_search_box(cx))
                 }),

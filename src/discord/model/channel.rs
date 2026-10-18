@@ -11,19 +11,29 @@ use super::markdown::{self, Inline};
 use super::user::small_avatar_url;
 
 /// The subset of Discord channel types the app knows how to display.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelKind {
     Text,
     Announcement,
     Voice,
     Stage,
     Forum,
+    PublicThread,
+    PrivateThread,
+    AnnouncementThread,
     Category,
 }
 
 impl ChannelKind {
     pub fn is_voice(self) -> bool {
         matches!(self, Self::Voice | Self::Stage)
+    }
+
+    pub fn is_thread(self) -> bool {
+        matches!(
+            self,
+            Self::PublicThread | Self::PrivateThread | Self::AnnouncementThread
+        )
     }
 }
 
@@ -46,6 +56,9 @@ pub struct Channel {
     /// Whether the current user holds `USE_EXTERNAL_EMOJIS` here. Nitro is
     /// needed as well before another guild's emoji can be sent.
     pub can_use_external_emoji: bool,
+    pub permissions: twilight_model::guild::Permissions,
+    pub forum_tags: Vec<super::threads::ForumTag>,
+    pub requires_tag: bool,
     /// The newest message, which decides whether the channel is unread.
     pub last_message_id: Option<Id<MessageMarker>>,
 }
@@ -80,9 +93,7 @@ impl DirectMessage {
 /// directories, ...).
 pub(in crate::discord) fn convert_channel(
     channel: twilight_model::channel::Channel,
-    can_send: bool,
-    can_manage_messages: bool,
-    can_use_external_emoji: bool,
+    permissions: twilight_model::guild::Permissions,
 ) -> Option<Channel> {
     let kind = match channel.kind {
         ChannelType::GuildText => ChannelKind::Text,
@@ -90,6 +101,9 @@ pub(in crate::discord) fn convert_channel(
         ChannelType::GuildVoice => ChannelKind::Voice,
         ChannelType::GuildStageVoice => ChannelKind::Stage,
         ChannelType::GuildForum => ChannelKind::Forum,
+        ChannelType::PublicThread => ChannelKind::PublicThread,
+        ChannelType::PrivateThread => ChannelKind::PrivateThread,
+        ChannelType::AnnouncementThread => ChannelKind::AnnouncementThread,
         ChannelType::GuildCategory => ChannelKind::Category,
         _ => return None,
     };
@@ -104,9 +118,25 @@ pub(in crate::discord) fn convert_channel(
             .topic
             .filter(|topic| !topic.trim().is_empty())
             .map(|topic| markdown::parse_preview(&topic)),
-        can_send,
-        can_manage_messages,
-        can_use_external_emoji,
+        can_send: permissions.contains(if kind.is_thread() {
+            twilight_model::guild::Permissions::SEND_MESSAGES_IN_THREADS
+        } else {
+            twilight_model::guild::Permissions::SEND_MESSAGES
+        }),
+        can_manage_messages: permissions
+            .contains(twilight_model::guild::Permissions::MANAGE_MESSAGES),
+        can_use_external_emoji: permissions
+            .contains(twilight_model::guild::Permissions::USE_EXTERNAL_EMOJIS),
+        permissions,
+        forum_tags: channel
+            .available_tags
+            .unwrap_or_default()
+            .into_iter()
+            .map(super::threads::convert_forum_tag)
+            .collect(),
+        requires_tag: channel.flags.is_some_and(|flags| {
+            flags.contains(twilight_model::channel::ChannelFlags::REQUIRE_TAG)
+        }),
         last_message_id: channel.last_message_id.map(Id::cast),
     })
 }
