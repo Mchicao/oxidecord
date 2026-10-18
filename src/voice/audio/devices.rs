@@ -6,6 +6,7 @@ use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 use cpal::{DeviceId, FromSample, Sample as _, SizedSample, StreamConfig, SupportedStreamConfig};
 
 use super::playback::{Mixer, Playback};
+use super::processing::Tap;
 use super::{CHANNELS, Capture, GainRamp, Shutdown};
 use crate::platform::audio::in_device_format;
 
@@ -111,7 +112,8 @@ pub(super) fn run_devices(
     shutdown: &Arc<Shutdown>,
 ) {
     let input = input.and_then(|(device, config)| build_input(&device, config, capture.clone()));
-    let output = output.and_then(|(device, config)| build_output(&device, config, mixer.clone()));
+    let output = output
+        .and_then(|(device, config)| build_output(&device, config, mixer.clone(), capture.clone()));
 
     if input.is_none() && output.is_none() {
         return;
@@ -159,13 +161,42 @@ where
             .load(std::sync::atomic::Ordering::Relaxed),
     ));
     let step = 1. / (config.sample_rate.max(1) as f32 * capture.ring.channels as f32 * 0.005);
+    let mut tap = Tap::new(
+        capture.processing.clone(),
+        config.sample_rate,
+        device_channels,
+    );
+    let errors = capture.processing.clone();
     device
         .build_input_stream(
             config,
-            move |data: &[T], _: &_| push_capture(data, device_channels, &capture, &mut gain, step),
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                if capture
+                    .control
+                    .processing_bits
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    != 0
+                {
+                    let time = info.timestamp();
+                    if let Some(age) = time.callback.checked_duration_since(time.capture)
+                        && let Some(at) = std::time::Instant::now().checked_sub(age)
+                    {
+                        tap.push(data, at, false);
+                    } else {
+                        capture
+                            .processing
+                            .fail("Microphone timestamps are invalid; Sonora microphone blocked.");
+                    }
+                } else {
+                    push_capture(data, device_channels, &capture, &mut gain, step);
+                }
+            },
             // Usually the device going away mid-call, which is worth knowing
             // about when a call has gone one-way.
-            |err| eprintln!("microphone stream error: {err}"),
+            move |err| {
+                errors.fail("The microphone stream failed; Sonora microphone blocked.");
+                eprintln!("microphone stream error: {err}");
+            },
             None,
         )
         .ok()
@@ -173,7 +204,7 @@ where
 
 /// Copies one callback's worth of microphone into the ring, keeping only the
 /// channels [`ring_channels`] promised the mixer.
-fn push_capture<T>(
+pub(super) fn push_capture<T>(
     data: &[T],
     device_channels: usize,
     capture: &Capture,
@@ -233,6 +264,7 @@ fn build_output(
     device: &cpal::Device,
     config: SupportedStreamConfig,
     mixer: Arc<Mixer>,
+    capture: Arc<Capture>,
 ) -> Option<cpal::Stream> {
     let stream = in_device_format!(
         config.sample_format(),
@@ -240,6 +272,7 @@ fn build_output(
         device,
         config.into(),
         mixer,
+        capture,
     )?;
     stream.play().ok()?;
     Some(stream)
@@ -249,17 +282,34 @@ fn output_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
     mixer: Arc<Mixer>,
+    capture: Arc<Capture>,
 ) -> Option<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
+    f32: FromSample<T>,
 {
     let mut render = Playback::new(mixer, config.sample_rate, usize::from(config.channels));
+    let mut tap = Tap::new(
+        capture.processing.clone(),
+        config.sample_rate,
+        usize::from(config.channels),
+    );
+    let errors = capture.processing.clone();
 
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], _: &_| render.render(data),
-            |err| eprintln!("speaker stream error: {err}"),
+            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                render.render(data);
+                if capture.control.processing_bits.load(std::sync::atomic::Ordering::Acquire) & 2 != 0 {
+                    let time = info.timestamp();
+                    if let Some(delay) = time.playback.checked_duration_since(time.callback)
+                        && let Some(at) = std::time::Instant::now().checked_add(delay) {
+                            tap.push(data, at, true);
+                        } else { capture.processing.fail("Playback timestamps are invalid; echo cancellation microphone blocked."); }
+                }
+            },
+            move |err| { if errors.control.processing_bits.load(std::sync::atomic::Ordering::Acquire) & 2 != 0 { errors.fail("The playback stream failed; echo cancellation microphone blocked."); } eprintln!("speaker stream error: {err}"); },
             None,
         )
         .ok()
@@ -343,6 +393,8 @@ mod local_speaking_tests {
         control.activate_session(session);
         Arc::new(AudioIo {
             capture: Arc::new(Capture {
+                processing: super::super::processing::Processing::new(control.clone(), session),
+                rate: 48_000,
                 ring: SampleRing::new(48_000, 1, 30),
                 activity: CaptureActivity::default(),
                 control: control.clone(),
@@ -443,6 +495,8 @@ mod local_speaking_tests {
         let session = control.begin_session();
         control.activate_session(session);
         let capture = Capture {
+            processing: super::super::processing::Processing::new(control.clone(), session),
+            rate: 44_100,
             ring: SampleRing::new(44_100, 2, 0),
             activity: CaptureActivity::default(),
             control,
@@ -688,6 +742,11 @@ mod local_speaking_tests {
         );
         push(&[0.8; 4096], &old);
         let capture = Arc::new(Capture {
+            processing: super::super::processing::Processing::new(
+                old.capture.control.clone(),
+                old.capture.session,
+            ),
+            rate: 48_000,
             ring: SampleRing::new(48_000, 1, 30),
             activity: CaptureActivity::default(),
             control: old.capture.control.clone(),

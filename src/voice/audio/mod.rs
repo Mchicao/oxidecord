@@ -36,6 +36,7 @@ mod devices;
 mod incoming;
 mod microphone;
 mod playback;
+pub(crate) mod processing;
 mod ring;
 pub(crate) mod settings;
 
@@ -125,6 +126,8 @@ pub struct AudioIo {
 }
 
 pub(super) struct Capture {
+    processing: Arc<processing::Processing>,
+    rate: u32,
     ring: SampleRing,
     activity: CaptureActivity,
     pub(super) control: Arc<AudioControl>,
@@ -134,11 +137,19 @@ pub(super) struct Capture {
 impl Capture {
     fn open(&self, state: settings::CaptureState) -> bool {
         f32::from_bits(self.control.input_gain.load(Ordering::Relaxed)) > 0.
+            && self.processing.is_current()
+            && self.control.processing_ready(state.epoch())
             && state.open(
                 self.activity
                     .active(std::time::Instant::now(), state.epoch()),
                 self.session,
             )
+    }
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        self.processing.stop();
     }
 }
 
@@ -177,6 +188,8 @@ impl AudioIo {
 
         let this = Self {
             capture: Arc::new(Capture {
+                processing: processing::Processing::new(control.clone(), session),
+                rate: capture_format.0,
                 ring: SampleRing::new(
                     capture_format.0,
                     capture_format.1 as usize,
@@ -192,6 +205,7 @@ impl AudioIo {
             deafened: Arc::new(AtomicBool::new(false)),
             capture_format,
         };
+        this.configure_processing();
 
         let capture = this.capture.clone();
         let mixer = this.mixer.clone();
@@ -217,6 +231,19 @@ impl AudioIo {
             sample_rate,
             channels,
         )
+    }
+
+    pub(super) fn configure_processing(&self) {
+        self.capture.ring.clear();
+        self.capture.activity.clear();
+        self.capture.processing.configure(
+            Arc::downgrade(&self.capture),
+            processing::Options::from_bits(
+                self.capture.control.processing_bits.load(Ordering::Acquire),
+            ),
+            self.capture.rate,
+            self.capture.ring.channels,
+        );
     }
 
     /// Queues one Opus packet from the call for playback. `opus` is the
@@ -303,6 +330,7 @@ impl AudioIo {
     /// on after the user hung up.
     pub fn stop(&self) {
         self.shutdown.stop();
+        self.capture.processing.stop();
         self.capture.ring.clear();
         self.forget_all();
     }

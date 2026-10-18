@@ -104,10 +104,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sonora_toggles_round_trip_independently_and_legacy_is_bypass() {
+        for bits in 0u8..8 {
+            let mut prefs = Prefs::default();
+            prefs.audio.processing = crate::voice::ProcessingOptions {
+                noise_suppression: bits & 1 != 0,
+                echo_cancellation: bits & 2 != 0,
+                automatic_gain_control: bits & 4 != 0,
+            };
+            let read: Prefs =
+                serde_json::from_str(&serde_json::to_string(&prefs).expect("prefs JSON"))
+                    .expect("processing prefs");
+            assert_eq!(read.audio.processing, prefs.audio.processing);
+        }
+        let legacy: Prefs = serde_json::from_str(
+            r#"{"audio":{"input_gain":0.5,"mode":"push_to_talk"},"theme":"dark"}"#,
+        )
+        .expect("pre-Sonora prefs");
+        assert_eq!(
+            legacy.audio.processing,
+            crate::voice::ProcessingOptions::default()
+        );
+        assert_eq!(legacy.audio.input_gain, 0.5);
+        assert_eq!(legacy.audio.mode, crate::voice::InputMode::PushToTalk);
+        assert_eq!(legacy.theme.as_deref(), Some("dark"));
+    }
+
+    #[test]
     fn audio_preferences_round_trip_and_legacy_defaults_preserve_audio() {
         use crate::voice::{AudioPreferences, InputMode};
         let preferences = Prefs {
             audio: AudioPreferences {
+                processing: Default::default(),
                 input_gain: 1.5,
                 output_gain: 0.25,
                 threshold_db: -55.,

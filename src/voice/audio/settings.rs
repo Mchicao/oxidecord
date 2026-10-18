@@ -1,8 +1,9 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 
+use super::processing::{Options, Status};
 use crate::platform::ptt;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +19,7 @@ pub enum InputMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "StoredPreferences")]
 pub struct AudioPreferences {
+    pub processing: crate::voice::ProcessingOptions,
     pub input_gain: f32,
     pub output_gain: f32,
     pub mode: InputMode,
@@ -28,6 +30,7 @@ pub struct AudioPreferences {
 impl Default for AudioPreferences {
     fn default() -> Self {
         Self {
+            processing: Options::default(),
             input_gain: 1.,
             output_gain: 1.,
             mode: InputMode::AlwaysOn,
@@ -40,6 +43,7 @@ impl Default for AudioPreferences {
 #[derive(Deserialize)]
 #[serde(default)]
 struct StoredPreferences {
+    processing: Options,
     input_gain: f32,
     output_gain: f32,
     mode: InputMode,
@@ -51,6 +55,7 @@ impl Default for StoredPreferences {
     fn default() -> Self {
         let value = AudioPreferences::default();
         Self {
+            processing: value.processing,
             input_gain: value.input_gain,
             output_gain: value.output_gain,
             mode: value.mode,
@@ -65,6 +70,7 @@ impl TryFrom<StoredPreferences> for AudioPreferences {
 
     fn try_from(value: StoredPreferences) -> Result<Self, Self::Error> {
         let value = Self {
+            processing: value.processing,
             input_gain: value.input_gain,
             output_gain: value.output_gain,
             mode: value.mode,
@@ -116,6 +122,12 @@ pub(crate) struct AudioControl {
     pub(super) input_gain: AtomicU32,
     pub(super) output_gain: AtomicU32,
     threshold: AtomicU32,
+    pub(super) processing_bits: AtomicU8,
+    processing_status: AtomicU8,
+    processing_epoch: AtomicU64,
+    processing_error: Mutex<Option<&'static str>>,
+    pub(super) processing_owner: AtomicU64,
+    pub(super) active_processing: Mutex<Weak<super::processing::Processing>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,6 +172,16 @@ impl AudioControl {
             input_gain: AtomicU32::new(preferences.input_gain.to_bits()),
             output_gain: AtomicU32::new(preferences.output_gain.to_bits()),
             threshold: AtomicU32::new(10f32.powf(preferences.threshold_db / 10.).to_bits()),
+            processing_bits: AtomicU8::new(preferences.processing.bits()),
+            processing_status: AtomicU8::new(if preferences.processing.bits() == 0 {
+                Status::Bypass
+            } else {
+                Status::Starting
+            } as u8),
+            processing_epoch: AtomicU64::new(u64::MAX),
+            processing_error: Mutex::new(None),
+            processing_owner: AtomicU64::new(0),
+            active_processing: Mutex::new(Weak::new()),
         }
     }
 
@@ -200,6 +222,48 @@ impl AudioControl {
 
     pub(super) fn threshold(&self) -> f64 {
         f64::from(f32::from_bits(self.threshold.load(Ordering::Relaxed)))
+    }
+
+    pub(super) fn processing_ready(&self, epoch: u64) -> bool {
+        self.processing_bits.load(Ordering::Acquire) == 0
+            || (self.processing_status.load(Ordering::Acquire) == Status::Active as u8
+                && self.processing_epoch.load(Ordering::Acquire) == epoch)
+    }
+
+    pub(super) fn processing_state(
+        &self,
+        status: Status,
+        error: Option<&'static str>,
+        session: u64,
+        epoch: u64,
+        owner: u64,
+    ) {
+        let current = self.snapshot();
+        if self.processing_owner.load(Ordering::Acquire) != owner
+            || current.session & !1 != session
+            || current.epoch() != epoch
+            || self.processing_bits.load(Ordering::Acquire) == 0
+        {
+            return;
+        }
+        if status == Status::Active {
+            self.processing_epoch.store(epoch, Ordering::Release);
+        }
+        if self.processing_status.swap(status as u8, Ordering::AcqRel) != status as u8 {
+            if let Ok(mut current) = self.processing_error.lock() {
+                *current = error;
+            }
+            if status != Status::Active {
+                self.transmission(false, session);
+            }
+            self.notify();
+        }
+    }
+
+    pub(in crate::voice) fn invalidate_capture(&self) {
+        self.state.fetch_add(GENERATION, Ordering::AcqRel);
+        self.processing_epoch.store(u64::MAX, Ordering::Release);
+        self.transmission(false, self.session.load(Ordering::Acquire) & !1);
     }
 
     pub(crate) fn ptt_ready(&self, down: bool) {
@@ -273,6 +337,35 @@ impl AudioControl {
     }
 
     pub(super) fn configure(&self, preferences: &AudioPreferences, rebind: bool) {
+        self.invalidate_capture();
+        let processing_changed = self
+            .processing_bits
+            .swap(preferences.processing.bits(), Ordering::AcqRel)
+            != preferences.processing.bits();
+        if processing_changed {
+            self.processing_epoch.store(u64::MAX, Ordering::Release);
+            self.processing_status.store(
+                if preferences.processing.bits() == 0 {
+                    Status::Bypass
+                } else {
+                    Status::Starting
+                } as u8,
+                Ordering::Release,
+            );
+            if let Ok(mut error) = self.processing_error.lock() {
+                *error = None;
+            }
+            if preferences.processing.bits() == 0 {
+                let active = self
+                    .active_processing
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .upgrade();
+                if let Some(active) = active {
+                    active.stop();
+                }
+            }
+        }
         if rebind {
             self.ptt_failed();
         }
@@ -292,6 +385,9 @@ impl AudioControl {
         self.state.fetch_add(GENERATION, Ordering::AcqRel);
         if preferences.input_gain == 0. {
             self.transmission(false, self.session.load(Ordering::Acquire) & !1);
+        }
+        if processing_changed && let Some(commands) = &self.commands {
+            let _ = commands.unbounded_send(crate::voice::Command::Processing);
         }
     }
 
@@ -439,6 +535,20 @@ impl AudioSettings {
             return "Microphone blocked: background keyboard input stopped. Switch modes and reselect Push to talk to retry.".into();
         }
         "Background push to talk ready. Hold the chosen key to transmit; release it to stop.".into()
+    }
+
+    pub fn processing_status(&self) -> String {
+        let bits = self.control.processing_bits.load(Ordering::Acquire);
+        if bits == 0 {
+            return "Sonora bypassed: all processing is off; no DSP worker or rate conversion."
+                .into();
+        }
+        match self.control.processing_status.load(Ordering::Acquire) {
+            value if value == Status::Active as u8 && self.control.processing_ready(self.control.snapshot().epoch()) => "Sonora active. Echo reference covers this call's playback only, not other apps or system audio.".into(),
+            value if value == Status::WaitingReference as u8 => "Microphone blocked: echo cancellation is waiting for a fresh, synchronized call playback reference. Disable Echo cancellation to use NS/AGC without it.".into(),
+            value if value == Status::Failed as u8 => format!("Microphone blocked: {} Turn processing off for explicit bypass, or change processing toggles to retry.", self.control.processing_error.lock().ok().and_then(|error| *error).unwrap_or("Sonora processing failed.")),
+            _ => "Sonora requested; microphone blocked until the call's processing pipeline is ready.".into(),
+        }
     }
 
     pub(crate) fn begin_session(&self) -> u64 {

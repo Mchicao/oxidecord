@@ -216,6 +216,7 @@ fn voice_page(settings: CueSettings, audio: AudioSettings) -> SettingPage {
     let key_read = audio.clone();
     let key_write = audio.clone();
     let status = audio.clone();
+    let processing_status = audio.clone();
     SettingPage::new("Voice")
         .resettable(false)
         .group(
@@ -232,8 +233,8 @@ fn voice_page(settings: CueSettings, audio: AudioSettings) -> SettingPage {
                         value.mode = match mode.as_ref() { "voice_activity" => InputMode::VoiceActivity, "push_to_talk" => InputMode::PushToTalk, _ => InputMode::AlwaysOn };
                         save_audio(&mode_write, value, cx);
                     },
-                )).description("Mute, deafen and server restrictions always take priority. No noise cancellation or automatic gain control is applied."))
-                .item(SettingItem::new("Voice activity threshold (dBFS)", audio_number(audio, AudioNumber::Threshold))
+                )).description("Mute, deafen and server restrictions always take priority. Processing is optional and off by default."))
+                .item(SettingItem::new("Voice activity threshold (dBFS)", audio_number(audio.clone(), AudioNumber::Threshold))
                     .description("Manual sensitivity for Voice activity only. Lower values open on quieter sounds; -80 to 0 dBFS with a 200 ms hold. Energy detection also reacts to noise."))
                 .item(SettingItem::new("Push-to-talk key", SettingField::dropdown(
                     crate::platform::ptt::keys().into_iter().map(|(key, name)| (key.to_string().into(), name.into())).collect(),
@@ -248,6 +249,23 @@ fn voice_page(settings: CueSettings, audio: AudioSettings) -> SettingPage {
                 )).description("Single keyboard key, including left/right modifiers and F1–F24. Changes release PTT; release and press the new key to resume."))
                 .item(SettingItem::render(move |_: &RenderOptions, _, cx| {
                     div().text_sm().text_color(cx.theme().muted_foreground).child(status.ptt_status())
+                })),
+        )
+        .group(
+            SettingGroup::new().title("Sonora audio processing")
+                .item(SettingItem::new("Noise suppression", processing_switch(audio.clone(), ProcessingFeature::Noise))
+                    .description("Reduce steady background noise with Sonora's Wiener suppression. Not Krisp; speech and noise may still be affected."))
+                .item(SettingItem::new("Echo cancellation", processing_switch(audio.clone(), ProcessingFeature::Echo))
+                    .description("AEC3 uses the actual call audio sent to your output device. Other apps and system audio are not part of the reference. Missing or invalid reference blocks the microphone."))
+                .item(SettingItem::new("Automatic gain control", processing_switch(audio, ProcessingFeature::Gain))
+                    .description("AGC2 adapts microphone loudness before your manual gain. It cannot override 0% gain, mute, input mode or server restrictions."))
+                .item(SettingItem::render(move |_: &RenderOptions, _, cx| {
+                    div().text_sm().text_color(cx.theme().muted_foreground).child(processing_status.processing_status())
+                }))
+                .item(SettingItem::render(|_: &RenderOptions, _, _| {
+                    Button::new("sonora-license").label("Sonora license").small().on_click(|_, window, cx| {
+                        window.open_dialog(cx, |dialog, _, _| dialog.title("Sonora — BSD-3-Clause").child(div().text_xs().child(crate::voice::SONORA_LICENSE)));
+                    })
                 })),
         )
         .group(
@@ -272,6 +290,36 @@ enum AudioNumber {
     Input,
     Output,
     Threshold,
+}
+
+#[derive(Clone, Copy)]
+enum ProcessingFeature {
+    Noise,
+    Echo,
+    Gain,
+}
+
+fn processing_switch(settings: AudioSettings, feature: ProcessingFeature) -> SettingField<bool> {
+    let read = settings.clone();
+    SettingField::switch(
+        move |_| {
+            let value = read.preferences().processing;
+            match feature {
+                ProcessingFeature::Noise => value.noise_suppression,
+                ProcessingFeature::Echo => value.echo_cancellation,
+                ProcessingFeature::Gain => value.automatic_gain_control,
+            }
+        },
+        move |enabled, cx| {
+            let mut value = settings.preferences();
+            match feature {
+                ProcessingFeature::Noise => value.processing.noise_suppression = enabled,
+                ProcessingFeature::Echo => value.processing.echo_cancellation = enabled,
+                ProcessingFeature::Gain => value.processing.automatic_gain_control = enabled,
+            }
+            save_audio(&settings, value, cx);
+        },
+    )
 }
 
 fn audio_number(settings: AudioSettings, field: AudioNumber) -> SettingField<SharedString> {

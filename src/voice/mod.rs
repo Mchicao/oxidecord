@@ -37,6 +37,8 @@ use crate::platform::runtime;
 
 use audio::AudioIo;
 
+pub use audio::processing::LICENSE as SONORA_LICENSE;
+pub use audio::processing::Options as ProcessingOptions;
 pub(crate) use audio::settings::AudioControl;
 pub use audio::settings::{AudioPreferences, AudioSettings, InputMode};
 pub use audio::{AudioDevice, input_devices, output_devices};
@@ -86,6 +88,7 @@ enum Command {
     Connect(Box<VoiceConnection>, u64),
     Disconnect,
     Gate,
+    Processing,
     Shutdown,
     Deafen(bool),
     /// Switch to another microphone, by the id [`input_devices`] reported.
@@ -263,6 +266,14 @@ async fn run(
                     call.update_transmission();
                 }
             }
+            Command::Processing => {
+                if let Some(call) = &mut call {
+                    if let Ok(audio) = call.audio.lock() {
+                        audio.configure_processing();
+                    }
+                    call.update_transmission();
+                }
+            }
             Command::Shutdown => break,
             Command::Deafen(value) => {
                 deafened = value;
@@ -396,6 +407,7 @@ fn swap_devices(
     let Ok(mut current) = call.audio.lock() else {
         return;
     };
+    current.capture.control.invalidate_capture();
 
     let audio = Arc::new(AudioIo::start(
         input_device,
