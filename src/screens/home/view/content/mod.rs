@@ -8,10 +8,11 @@ mod message_list;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, input::Input, v_flex,
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, input::Input, v_flex,
 };
 
 use crate::screens::home::{HomeScreen, View};
+use crate::ui::button::Button;
 use crate::ui::depth::radius;
 use crate::ui::window_controls::WindowControls;
 
@@ -103,6 +104,24 @@ pub(super) fn header_actions() -> Div {
 const SEARCH_WIDTH: f32 = 200.;
 
 impl HomeScreen {
+    /// Toggles the conversation's pinned messages, which hang just below the
+    /// header — anchored to the header's bottom rather than the click, which
+    /// could land anywhere on the button.
+    pub(super) fn render_pins_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        let open = self.pins_popup.is_some();
+        Button::new("toggle-pins")
+            .icon(Icon::default().path("icons/pin.svg"))
+            .ghost()
+            .small()
+            .selected(open)
+            .tooltip("Pinned Messages")
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                let below_header = px(super::INSET + HEADER_HEIGHT + 4.);
+                let position = point(event.position().x + px(16.), below_header);
+                this.toggle_pins(position, cx);
+            }))
+    }
+
     /// The message search box at the right of a conversation's header.
     /// Only there to be drawn for now: typing in it searches nothing.
     pub(super) fn render_search_box(&self, cx: &App) -> impl IntoElement {

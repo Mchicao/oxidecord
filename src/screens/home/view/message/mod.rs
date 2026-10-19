@@ -5,6 +5,7 @@ mod edit;
 mod embed;
 mod forward;
 mod menu;
+mod pins;
 mod reactions;
 mod reactors;
 mod reply;

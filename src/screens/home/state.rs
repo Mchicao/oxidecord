@@ -93,6 +93,18 @@ pub(super) struct ProfilePopup {
     pub error: Option<String>,
 }
 
+/// The open pinned-messages popout for the open conversation.
+pub(super) struct PinsPopup {
+    pub channel_id: Id<ChannelMarker>,
+    /// Window coordinates of the click on the header's pin button, which the
+    /// popout hangs below.
+    pub position: Point<Pixels>,
+    /// Most recently pinned first. Empty while loading.
+    pub messages: Vec<discord::Message>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 /// Where an emoji chosen from the picker goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum EmojiTarget {
@@ -388,6 +400,7 @@ pub struct HomeScreen {
     /// Every guild's custom emoji, from the gateway, for the emoji picker.
     pub(super) guild_emojis: HashMap<Id<GuildMarker>, Vec<discord::GuildEmoji>>,
     pub(super) emoji_picker: Option<EmojiPicker>,
+    pub(super) pins_popup: Option<PinsPopup>,
     /// The roles each member holds, by guild, as far as the gateway has told
     /// us. The signed-in user's decide whether a role mention pings them;
     /// everyone's colour their names.
@@ -534,6 +547,7 @@ impl HomeScreen {
             requested_members: HashSet::new(),
             guild_emojis: HashMap::new(),
             emoji_picker: None,
+            pins_popup: None,
             member_list: None,
             member_list_hidden: prefs::load().member_list_hidden,
             search_input,

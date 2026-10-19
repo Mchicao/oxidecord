@@ -91,6 +91,7 @@ impl HomeScreen {
                     let hidden = self.member_list_hidden;
                     this.child(
                         header_actions()
+                            .child(self.render_pins_button(cx))
                             .child(
                                 Button::new("toggle-member-list")
                                     .icon(Icon::default().path("icons/users.svg"))

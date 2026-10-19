@@ -79,6 +79,7 @@ impl HomeScreen {
                                     .tooltip("Video isn't supported yet"),
                             )
                         })
+                        .child(self.render_pins_button(cx))
                         .child(self.render_search_box(cx)),
                 ),
             cx,

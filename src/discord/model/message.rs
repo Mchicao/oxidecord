@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use serde::Deserialize;
 use twilight_model::channel::message::{MessageReferenceType, MessageSnapshot};
 use twilight_model::id::{
     Id,
@@ -303,6 +304,20 @@ pub struct VideoAttachment {
     pub size: u64,
     /// The cover is a blurred poster frame.
     pub spoiler: Option<SpoilerCover>,
+}
+
+/// A page of `GET /channels/{id}/messages/pins`, most recently pinned first.
+#[derive(Deserialize)]
+pub(in crate::discord) struct RawPins {
+    pub items: Vec<RawPin>,
+    pub has_more: bool,
+}
+
+#[derive(Deserialize)]
+pub(in crate::discord) struct RawPin {
+    /// ISO 8601, which is what the next page's `before` takes.
+    pub pinned_at: String,
+    pub message: twilight_model::channel::Message,
 }
 
 pub(in crate::discord) fn convert_message(message: twilight_model::channel::Message) -> Message {

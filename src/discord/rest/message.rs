@@ -10,7 +10,9 @@ use twilight_model::id::{
 };
 
 use super::request;
-use crate::discord::model::{Message, ReactionEmoji, Reactor, convert_message, convert_reactor};
+use crate::discord::model::{
+    Message, RawPins, ReactionEmoji, Reactor, convert_message, convert_reactor,
+};
 
 /// How many messages one [`fetch_messages`] call requests; a response with
 /// fewer means the start of the channel's history was reached.
@@ -55,6 +57,37 @@ pub async fn fetch_messages(
         // `after` page.
         messages.sort_by_key(|message| message.id);
         Ok(messages.into_iter().map(convert_message).collect())
+    })
+    .await
+}
+
+/// Fetches every message pinned in a channel, most recently pinned first.
+///
+/// Uses `GET /channels/{id}/messages/pins`, which replaced the old
+/// `/channels/{id}/pins` (twilight's `pins`) and pages by pin time instead of
+/// capping at 50. Raw, since twilight has no helper for it.
+pub async fn fetch_pins(channel_id: Id<ChannelMarker>) -> Result<Vec<Message>, String> {
+    request(move |client| async move {
+        let mut messages = Vec::new();
+        let mut before: Option<String> = None;
+        loop {
+            let mut path = format!("channels/{channel_id}/messages/pins?limit=50");
+            if let Some(before) = &before {
+                // The offset's `+` would read as a space in a query string.
+                path.push_str(&format!("&before={}", before.replace('+', "%2B")));
+            }
+            let request = RequestBuilder::raw(Method::Get, path).build()?;
+            let page = client.request::<RawPins>(request).await?.model().await?;
+            before = page.items.last().map(|pin| pin.pinned_at.clone());
+            messages.extend(
+                page.items
+                    .into_iter()
+                    .map(|pin| convert_message(pin.message)),
+            );
+            if !page.has_more || before.is_none() {
+                return Ok(messages);
+            }
+        }
     })
     .await
 }

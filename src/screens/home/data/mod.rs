@@ -12,6 +12,7 @@ pub(super) mod guilds;
 pub(super) mod member_list;
 pub(super) mod members;
 pub(super) mod messages;
+pub(super) mod pins;
 pub(super) mod presence;
 pub(super) mod profile;
 pub(super) mod read_state;

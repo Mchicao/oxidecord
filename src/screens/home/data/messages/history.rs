@@ -203,6 +203,7 @@ impl HomeScreen {
         self.send_error = None;
         self.replying_to = None;
         self.editing = None;
+        self.pins_popup = None;
         self.revealed_spoilers.clear();
         self.unread_marker = None;
         self.marked_unread = false;
