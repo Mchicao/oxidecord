@@ -1,5 +1,7 @@
 //! The "<name> is typing…" strip above the composer while others are typing.
 
+use std::time::Duration;
+
 use gpui::*;
 use gpui_component::{ActiveTheme as _, h_flex};
 
@@ -19,6 +21,35 @@ impl HomeScreen {
                 .text_color(theme.foreground)
                 .child(name)
         };
+        // Discord's pulsing dots: each one swells and brightens in turn, a
+        // fifth of the cycle behind the one before it.
+        let foreground = theme.foreground;
+        let dots = h_flex().gap(px(3.)).children((0..3usize).map(|i| {
+            // Each dot grows inside a slot sized for its largest, since gpui
+            // can't scale a div without relayout: a bare growing dot would
+            // shove its neighbours and the text along every pulse.
+            div()
+                .flex()
+                .size(px(7.))
+                .items_center()
+                .justify_center()
+                .child(div().rounded_full().with_animation(
+                    ("typing-dot", i),
+                    Animation::new(Duration::from_millis(1400)).repeat(),
+                    move |dot, delta| {
+                        let phase = (delta - i as f32 * 0.2).rem_euclid(1.0);
+                        // Up and back down over the first half of its turn,
+                        // then rests dim until the cycle comes round.
+                        let pulse = if phase < 0.5 {
+                            ease_in_out(1.0 - (phase * 4.0 - 1.0).abs())
+                        } else {
+                            0.0
+                        };
+                        dot.size(px(5. + pulse * 2.))
+                            .bg(foreground.opacity(0.35 + pulse * 0.65))
+                    },
+                ))
+        }));
         let mut line = h_flex()
             .gap_1()
             .text_xs()
@@ -52,6 +83,8 @@ impl HomeScreen {
                 .overflow_hidden()
                 // Masks the messages it sits over.
                 .bg(theme.background)
+                .gap_2()
+                .child(dots)
                 .child(line)
                 .into_any_element(),
         )
