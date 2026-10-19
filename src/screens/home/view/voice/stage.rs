@@ -13,10 +13,6 @@ use crate::ui::depth::radius;
 
 use super::tiles::{STAGE_PADDING, TILE_GAP, fit_tiles};
 
-/// Height of the call band shown above a DM conversation. A voice channel's
-/// stage fills its pane instead, since there's no chat under it.
-const DM_STAGE_HEIGHT: f32 = 280.;
-
 /// The tiles under a channel's join button, which aren't fitted to anything.
 const JOIN_TILE: Size<Pixels> = size(px(224.), px(126.));
 
@@ -40,29 +36,9 @@ impl HomeScreen {
             .into_any_element()
     }
 
-    /// The call band above a DM conversation, shown only while that DM's call
-    /// is up.
-    pub(in crate::screens::home) fn render_dm_stage(
-        &self,
-        cx: &Context<Self>,
-    ) -> Option<impl IntoElement> {
-        let call = self
-            .voice
-            .as_ref()
-            .filter(|call| call.guild_id.is_none())
-            .filter(|call| Some(call.channel_id) == self.selected_channel)?;
-
-        Some(
-            self.stage(call, cx)
-                .h(px(DM_STAGE_HEIGHT))
-                .flex_shrink_0()
-                .border_b_1()
-                .border_color(cx.theme().border),
-        )
-    }
-
-    /// The tiles and the control bar under them, shared by both stages.
-    fn stage(&self, call: &VoiceCall, cx: &Context<Self>) -> Div {
+    /// The tiles and the control bar under them, shared with a DM's call
+    /// band while there's a stream in it.
+    pub(super) fn stage(&self, call: &VoiceCall, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let participants = self.voice_participants(call.channel_id);
         // Until the voice state for the join comes back there's nobody to

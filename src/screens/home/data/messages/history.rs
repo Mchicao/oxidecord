@@ -22,6 +22,13 @@ impl HomeScreen {
         }
         self.save_collapsed_categories();
         self.selected_channel = Some(channel_id);
+        // A DM's call that started before this session did is only reported
+        // on request, and the call view needs to know it's there.
+        if self.view == View::DirectMessages
+            && let Some(gateway) = &self.gateway
+        {
+            gateway.request_call_connect(channel_id);
+        }
         self.load_messages(window, cx);
     }
 

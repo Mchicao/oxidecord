@@ -185,6 +185,38 @@ fn voice_state_update_reads_its_own_member() {
 }
 
 #[test]
+fn call_create_puts_its_voice_states_in_the_call() {
+    let events = dispatch_json(
+        "CALL_CREATE",
+        r#"{
+            "channel_id": "200",
+            "message_id": "5",
+            "region": "india",
+            "ringing": ["1"],
+            "voice_states": [{"user_id": "2", "session_id": "abc", "self_mute": true}]
+        }"#,
+    );
+
+    let [
+        GatewayEvent::CallCreate {
+            channel_id,
+            ringing,
+            voice_states,
+        },
+    ] = events.as_slice()
+    else {
+        panic!("CALL_CREATE should yield one call");
+    };
+    assert_eq!(*channel_id, Id::new(200));
+    assert_eq!(ringing, &[Id::new(1)]);
+    let [state] = voice_states.as_slice() else {
+        panic!("the call should carry its one voice state");
+    };
+    assert_eq!(state.channel_id, Some(Id::new(200)));
+    assert!(state.self_mute);
+}
+
+#[test]
 fn ready_carries_read_states_and_the_channels_the_user_can_see() {
     let events = dispatch_json(
         "READY",

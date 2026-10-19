@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use gpui::*;
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, GuildMarker},
+    marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 
 use crate::discord;
@@ -67,8 +67,9 @@ impl HomeScreen {
         self.selected_channel = Some(channel_id);
     }
 
-    /// Places a call in the open DM conversation. Discord treats a DM call as
-    /// a guildless voice channel, so it joins the same way.
+    /// Places a call in the open DM conversation, or joins the one already
+    /// going there. Discord treats a DM call as a guildless voice channel, so
+    /// it joins the same way.
     pub(in crate::screens::home) fn start_dm_call(&mut self, cx: &mut Context<Self>) {
         let Some(dm) = self.selected_dm_info().cloned() else {
             return;
@@ -76,6 +77,8 @@ impl HomeScreen {
         if self.in_voice_channel(dm.id) {
             return;
         }
+        // Answering a call shouldn't ring the person who placed it.
+        let ring = self.voice_participants(dm.id).is_empty();
 
         self.open_call(
             VoiceCall {
@@ -85,7 +88,7 @@ impl HomeScreen {
                 context: None,
                 status: VoiceStatus::Connecting,
                 error: None,
-                ring: true,
+                ring,
                 session_id: None,
                 share_error: None,
                 watch_error: None,
@@ -348,6 +351,84 @@ impl HomeScreen {
             });
         })
         .detach();
+    }
+
+    /// Records a DM's call as the gateway reports it on starting, or when
+    /// asked after: everyone in it replaces whoever was thought to be.
+    pub(in crate::screens::home) fn handle_call_create(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        ringing: Vec<Id<UserMarker>>,
+        states: Vec<discord::VoiceUserState>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut previous: HashMap<_, _> = self
+            .voice_states
+            .extract_if(|_, state| state.channel_id == Some(channel_id))
+            .collect();
+        for state in states {
+            let known = previous.remove(&state.user_id);
+            let state = with_known_profile(state, known.as_ref());
+            self.voice_states.insert(state.user_id, state);
+        }
+        self.call_ringing.insert(channel_id, ringing);
+        cx.notify();
+    }
+
+    /// A DM's call ended. Each participant's own `VOICE_STATE_UPDATE` says
+    /// they left too, but this one is certain to arrive.
+    pub(in crate::screens::home) fn handle_call_delete(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        cx: &mut Context<Self>,
+    ) {
+        self.call_ringing.remove(&channel_id);
+        let self_id = self.self_user_id;
+        // The user's own state is left to the call they hold, which a late
+        // delete for a call they've just rejoined would otherwise contradict.
+        self.voice_states.retain(|user_id, state| {
+            state.channel_id != Some(channel_id) || Some(*user_id) == self_id
+        });
+        cx.notify();
+    }
+
+    /// Declines the call ringing the user in the open DM. Only the ringing
+    /// stops; the caller is left in the call, as Discord leaves them.
+    pub(in crate::screens::home) fn decline_dm_call(&mut self, cx: &mut Context<Self>) {
+        let (Some(dm), Some(self_id)) = (self.selected_dm_info(), self.self_user_id) else {
+            return;
+        };
+        let channel_id = dm.id;
+        // Dropped here rather than waiting on the `CALL_UPDATE` that confirms
+        // it, so the prompt goes the moment it's answered.
+        if let Some(ringing) = self.call_ringing.get_mut(&channel_id) {
+            ringing.retain(|user_id| *user_id != self_id);
+        }
+        cx.spawn(async move |_, _| {
+            if let Err(err) = discord::stop_ringing(channel_id).await {
+                eprintln!("declining the call failed: {err}");
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Who an ongoing DM call is ringing, minus anyone who has since joined.
+    pub(in crate::screens::home) fn call_ringing(
+        &self,
+        channel_id: Id<ChannelMarker>,
+    ) -> Vec<Id<UserMarker>> {
+        self.call_ringing
+            .get(&channel_id)
+            .into_iter()
+            .flatten()
+            .filter(|user_id| {
+                self.voice_states
+                    .get(user_id)
+                    .is_none_or(|state| state.channel_id != Some(channel_id))
+            })
+            .copied()
+            .collect()
     }
 
     /// Records the voice server for the join in flight.

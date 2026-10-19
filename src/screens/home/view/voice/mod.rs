@@ -1,7 +1,8 @@
 //! Call chrome: the sidebar's connected panel, the stage of participant tiles,
-//! and the control bar under it.
+//! the bubbles above a DM's conversation, and the control bar under either.
 
 mod controls;
+mod dm_call;
 mod panel;
 mod stage;
 mod tiles;

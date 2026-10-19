@@ -22,6 +22,22 @@ pub(super) struct StreamCreatePayload {
     pub(super) rtc_server_id: String,
 }
 
+/// `CALL_CREATE` and `CALL_UPDATE`: a DM's call, and who it's ringing. Only a
+/// create carries who's already in it.
+#[derive(Deserialize)]
+pub(super) struct CallPayload {
+    pub(super) channel_id: Id<ChannelMarker>,
+    #[serde(default)]
+    pub(super) ringing: Vec<Id<UserMarker>>,
+    #[serde(default)]
+    pub(super) voice_states: Vec<RawVoiceState>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CallDeletePayload {
+    pub(super) channel_id: Id<ChannelMarker>,
+}
+
 #[derive(Deserialize)]
 pub(super) struct StreamDeletePayload {
     pub(super) stream_key: String,

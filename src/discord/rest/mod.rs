@@ -18,7 +18,7 @@ use crate::discord::token;
 use crate::platform::runtime;
 
 pub use auth::log_out;
-pub use channel::{fetch_dms, ring_call};
+pub use channel::{fetch_dms, ring_call, stop_ringing};
 pub use guild::{fetch_channels, fetch_guilds};
 pub use message::{
     MAX_ATTACHMENT_SIZE, MESSAGE_PAGE_SIZE, MessagePage, REACTORS_PAGE_SIZE, ack_message,

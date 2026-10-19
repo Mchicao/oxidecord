@@ -329,6 +329,9 @@ pub struct HomeScreen {
     /// Who is transmitting in the open call, from the audio the driver
     /// receives rather than from the gateway.
     pub(super) voice_speaking: HashSet<Id<UserMarker>>,
+    /// Who each ongoing DM call is ringing, by channel. Only calls the gateway
+    /// has reported are here; one with nobody being rung has an empty list.
+    pub(super) call_ringing: HashMap<Id<ChannelMarker>, Vec<Id<UserMarker>>>,
     /// The connection parameters for a join that's still in flight.
     pub(super) pending_voice: Option<PendingVoice>,
     /// Runs the call. Started with the gateway, since a call needs both.
@@ -508,6 +511,7 @@ impl HomeScreen {
             voice_input_device: prefs::load().input_device,
             voice_states: HashMap::new(),
             voice_speaking: HashSet::new(),
+            call_ringing: HashMap::new(),
             pending_voice: None,
             voice_engine: None,
             screen_share: None,

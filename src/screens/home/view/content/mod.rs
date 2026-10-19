@@ -90,6 +90,16 @@ pub(super) fn header_content() -> Stateful<Div> {
         })
 }
 
+/// The buttons at the right of [`header_content`].
+///
+/// They sit inside the drag region, and Windows asks which window-control
+/// area is under the pointer before a click ever reaches gpui — any drag
+/// hitbox under it answers "caption", and the click becomes a window drag.
+/// Occluding the row keeps the drag region out of that hit test.
+pub(super) fn header_actions() -> Div {
+    h_flex().flex_shrink_0().gap_2().items_center().occlude()
+}
+
 const SEARCH_WIDTH: f32 = 200.;
 
 impl HomeScreen {

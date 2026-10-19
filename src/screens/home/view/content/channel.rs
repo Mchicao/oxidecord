@@ -13,7 +13,7 @@ use crate::ui::button::Button;
 use crate::ui::theme;
 
 use super::super::markdown::MarkdownOptions;
-use super::{header, header_content, message_list, pane};
+use super::{header, header_actions, header_content, message_list, pane};
 
 impl HomeScreen {
     pub(super) fn render_channel_content(&self, cx: &Context<Self>) -> AnyElement {
@@ -90,19 +90,24 @@ impl HomeScreen {
                 .when(!channel.kind.is_voice(), |this| {
                     let hidden = self.member_list_hidden;
                     this.child(
-                        Button::new("toggle-member-list")
-                            .icon(Icon::default().path("icons/users.svg"))
-                            .ghost()
-                            .small()
-                            .selected(!hidden)
-                            .tooltip(if hidden {
-                                "Show Member List"
-                            } else {
-                                "Hide Member List"
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_member_list(cx))),
+                        header_actions()
+                            .child(
+                                Button::new("toggle-member-list")
+                                    .icon(Icon::default().path("icons/users.svg"))
+                                    .ghost()
+                                    .small()
+                                    .selected(!hidden)
+                                    .tooltip(if hidden {
+                                        "Show Member List"
+                                    } else {
+                                        "Hide Member List"
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_member_list(cx)),
+                                    ),
+                            )
+                            .child(self.render_search_box(cx)),
                     )
-                    .child(self.render_search_box(cx))
                 }),
             cx,
         )

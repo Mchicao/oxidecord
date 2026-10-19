@@ -163,6 +163,21 @@ impl HomeScreen {
             discord::GatewayEvent::GuildVoiceStates { guild_id, states } => {
                 self.replace_voice_states(Some(guild_id), states, cx)
             }
+            discord::GatewayEvent::CallCreate {
+                channel_id,
+                ringing,
+                voice_states,
+            } => self.handle_call_create(channel_id, ringing, voice_states, cx),
+            discord::GatewayEvent::CallUpdate {
+                channel_id,
+                ringing,
+            } => {
+                self.call_ringing.insert(channel_id, ringing);
+                cx.notify();
+            }
+            discord::GatewayEvent::CallDelete { channel_id } => {
+                self.handle_call_delete(channel_id, cx)
+            }
             discord::GatewayEvent::VoiceServer(server) => self.handle_voice_server(server, cx),
             discord::GatewayEvent::StreamCreate {
                 stream_key,

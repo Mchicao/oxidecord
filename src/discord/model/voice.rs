@@ -114,6 +114,21 @@ pub(in crate::discord) fn convert_guild_voice_states<'a>(
         .collect()
 }
 
+/// The voice states bundled into a `CALL_CREATE`. They're the call's by
+/// definition, so one that leaves its channel out is put in it.
+pub(in crate::discord) fn convert_call_voice_states(
+    channel_id: Id<ChannelMarker>,
+    states: Vec<RawVoiceState>,
+) -> Vec<VoiceUserState> {
+    states
+        .into_iter()
+        .map(|mut state| {
+            state.channel_id.get_or_insert(channel_id);
+            convert(state, None, None)
+        })
+        .collect()
+}
+
 fn convert(
     raw: RawVoiceState,
     guild_id: Option<Id<GuildMarker>>,

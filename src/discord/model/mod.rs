@@ -47,6 +47,6 @@ pub(super) use read_state::{
 pub(super) use settings::{RawSettingsProto, encode_status_settings, parse_user_settings};
 pub(super) use user::{RawProfile, convert_current_user, convert_reactor, convert_user_profile};
 pub(super) use voice::{
-    RawVoiceServer, RawVoiceState, convert_guild_voice_states, convert_stream_server,
-    convert_voice_server, convert_voice_state,
+    RawVoiceServer, RawVoiceState, convert_call_voice_states, convert_guild_voice_states,
+    convert_stream_server, convert_voice_server, convert_voice_state,
 };

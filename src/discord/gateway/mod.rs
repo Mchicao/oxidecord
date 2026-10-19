@@ -81,6 +81,22 @@ pub enum GatewayEvent {
         guild_id: Id<GuildMarker>,
         states: Vec<VoiceUserState>,
     },
+    /// A DM's call has started, or was asked after: who's in it, and who it's
+    /// ringing. Replaces what was known of that call.
+    CallCreate {
+        channel_id: Id<ChannelMarker>,
+        ringing: Vec<Id<UserMarker>>,
+        voice_states: Vec<VoiceUserState>,
+    },
+    /// Who a DM's call is ringing changed.
+    CallUpdate {
+        channel_id: Id<ChannelMarker>,
+        ringing: Vec<Id<UserMarker>>,
+    },
+    /// A DM's call ended: everyone has left it.
+    CallDelete {
+        channel_id: Id<ChannelMarker>,
+    },
     /// The voice server assigned to a call the user is joining.
     VoiceServer(VoiceServerInfo),
     /// A stream was created. For the user's own, it names the server the

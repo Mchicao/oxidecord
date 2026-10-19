@@ -9,7 +9,7 @@ use crate::screens::home::HomeScreen;
 use crate::screens::home::view::avatar;
 use crate::ui::button::Button;
 
-use super::{header, header_content, pane};
+use super::{header, header_actions, header_content, pane};
 
 impl HomeScreen {
     pub(super) fn render_dm_content(&self, cx: &Context<Self>) -> AnyElement {
@@ -43,6 +43,7 @@ impl HomeScreen {
         // The call buttons drop out while this conversation's call is up —
         // hanging up is the stage's job from there.
         let in_call = self.in_voice_channel(dm.id);
+        let ongoing = !self.voice_participants(dm.id).is_empty();
 
         header(
             header_content()
@@ -54,25 +55,32 @@ impl HomeScreen {
                         .child(dm.name.clone()),
                 )
                 .child(div().flex_1())
-                .when(!in_call, |this| {
-                    this.child(
-                        Button::new("dm-voice-call")
-                            .icon(Icon::default().path("icons/phone.svg"))
-                            .ghost()
-                            .small()
-                            .tooltip("Start Voice Call")
-                            .on_click(cx.listener(|this, _, _, cx| this.start_dm_call(cx))),
-                    )
-                    .child(
-                        Button::new("dm-video-call")
-                            .icon(Icon::default().path("icons/video.svg"))
-                            .ghost()
-                            .small()
-                            .disabled(true)
-                            .tooltip("Video isn't supported yet"),
-                    )
-                })
-                .child(self.render_search_box(cx)),
+                .child(
+                    header_actions()
+                        .when(!in_call, |this| {
+                            this.child(
+                                Button::new("dm-voice-call")
+                                    .icon(Icon::default().path("icons/phone.svg"))
+                                    .ghost()
+                                    .small()
+                                    .tooltip(if ongoing {
+                                        "Join Voice Call"
+                                    } else {
+                                        "Start Voice Call"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| this.start_dm_call(cx))),
+                            )
+                            .child(
+                                Button::new("dm-video-call")
+                                    .icon(Icon::default().path("icons/video.svg"))
+                                    .ghost()
+                                    .small()
+                                    .disabled(true)
+                                    .tooltip("Video isn't supported yet"),
+                            )
+                        })
+                        .child(self.render_search_box(cx)),
+                ),
             cx,
         )
     }

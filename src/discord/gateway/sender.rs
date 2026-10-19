@@ -59,6 +59,18 @@ impl GatewaySender {
         let _ = self.inner.send(payload.to_string());
     }
 
+    /// Sends `REQUEST_CALL_CONNECT` (opcode 13): asks after the call in a DM.
+    /// Without the `AUTO_CALL_CONNECT` capability, a call that started before
+    /// the session did is only reported on request, as a `CALL_CREATE`;
+    /// nothing comes back when there's none.
+    pub fn request_call_connect(&self, channel_id: Id<ChannelMarker>) {
+        let payload = serde_json::json!({
+            "op": 13,
+            "d": { "channel_id": channel_id }
+        });
+        let _ = self.inner.send(payload.to_string());
+    }
+
     /// Sends `STREAM_CREATE` (opcode 18): goes live in the call in
     /// `channel_id`. Discord answers with the stream's server, as dispatches.
     pub fn create_stream(&self, guild_id: Option<Id<GuildMarker>>, channel_id: Id<ChannelMarker>) {

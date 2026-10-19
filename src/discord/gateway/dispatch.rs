@@ -9,10 +9,11 @@ use twilight_model::util::Timestamp;
 
 use crate::discord::model::{
     RawEmoji, RawGuildChannel, RawGuildSettings, RawMember, RawMemberListUpdate, RawRole,
-    RawVoiceServer, RawVoiceState, StreamServerInfo, convert_channel_unreads, convert_guild_emoji,
-    convert_guild_unreads, convert_guild_voice_states, convert_member_list_update, convert_message,
-    convert_mute_settings, convert_reaction_emoji, convert_read_states, convert_role,
-    convert_stream_server, convert_voice_server, convert_voice_state, parse_user_settings,
+    RawVoiceServer, RawVoiceState, StreamServerInfo, convert_call_voice_states,
+    convert_channel_unreads, convert_guild_emoji, convert_guild_unreads,
+    convert_guild_voice_states, convert_member_list_update, convert_message, convert_mute_settings,
+    convert_reaction_emoji, convert_read_states, convert_role, convert_stream_server,
+    convert_voice_server, convert_voice_state, parse_user_settings,
 };
 
 use super::payloads::*;
@@ -179,6 +180,30 @@ pub(super) fn dispatch(
             .unwrap_or_default(),
         "VOICE_SERVER_UPDATE" => serde_json::from_str::<RawVoiceServer>(data)
             .map(|server| vec![GatewayEvent::VoiceServer(convert_voice_server(server))])
+            .unwrap_or_default(),
+        "CALL_CREATE" => serde_json::from_str::<CallPayload>(data)
+            .map(|call| {
+                vec![GatewayEvent::CallCreate {
+                    channel_id: call.channel_id,
+                    ringing: call.ringing,
+                    voice_states: convert_call_voice_states(call.channel_id, call.voice_states),
+                }]
+            })
+            .unwrap_or_default(),
+        "CALL_UPDATE" => serde_json::from_str::<CallPayload>(data)
+            .map(|call| {
+                vec![GatewayEvent::CallUpdate {
+                    channel_id: call.channel_id,
+                    ringing: call.ringing,
+                }]
+            })
+            .unwrap_or_default(),
+        "CALL_DELETE" => serde_json::from_str::<CallDeletePayload>(data)
+            .map(|call| {
+                vec![GatewayEvent::CallDelete {
+                    channel_id: call.channel_id,
+                }]
+            })
             .unwrap_or_default(),
         "STREAM_CREATE" => serde_json::from_str::<StreamCreatePayload>(data)
             .map(|stream| {

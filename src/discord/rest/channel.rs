@@ -41,3 +41,20 @@ pub async fn ring_call(channel_id: Id<ChannelMarker>) -> Result<(), String> {
     })
     .await
 }
+
+/// Stops a DM's call ringing the current user
+/// (`POST /channels/{id}/call/stop-ringing`): declining it, as far as anyone
+/// can tell. The call itself carries on for whoever is in it.
+pub async fn stop_ringing(channel_id: Id<ChannelMarker>) -> Result<(), String> {
+    request(move |client| async move {
+        let request = RequestBuilder::raw(
+            Method::Post,
+            format!("channels/{channel_id}/call/stop-ringing"),
+        )
+        .json(&serde_json::json!({ "recipients": null }))
+        .build()?;
+        client.request::<EmptyBody>(request).await?;
+        Ok(())
+    })
+    .await
+}
