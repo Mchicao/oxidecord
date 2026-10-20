@@ -25,6 +25,7 @@ impl HomeScreen {
             channel_id,
             position,
             messages: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, px(256.)),
             loading: true,
             error: None,
         });
@@ -43,7 +44,10 @@ impl HomeScreen {
                 };
                 popup.loading = false;
                 match result {
-                    Ok(messages) => popup.messages = messages,
+                    Ok(messages) => {
+                        popup.list.reset(messages.len());
+                        popup.messages = messages;
+                    }
                     Err(err) => popup.error = Some(err),
                 }
                 cx.notify();

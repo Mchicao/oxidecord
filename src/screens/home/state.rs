@@ -101,6 +101,11 @@ pub(super) struct PinsPopup {
     pub position: Point<Pixels>,
     /// Most recently pinned first. Empty while loading.
     pub messages: Vec<discord::Message>,
+    /// Lays the pins out the way the message list lays out messages: each on
+    /// its own, at the list's width. Nested in the popout's own flex layout,
+    /// text in a pin is measured as if it had no width, and the pin keeps the
+    /// height of all those wrapped lines as empty space.
+    pub list: ListState,
     pub loading: bool,
     pub error: Option<String>,
 }

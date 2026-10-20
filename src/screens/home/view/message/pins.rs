@@ -13,7 +13,9 @@ use crate::ui::depth::{self, Level, radius};
 use super::super::markdown::MarkdownOptions;
 use super::MEDIA_MAX_WIDTH;
 
-const MAX_LIST_HEIGHT: f32 = 480.;
+const LIST_HEIGHT: f32 = 480.;
+/// Space around and between pins.
+const LIST_GAP: f32 = 8.;
 const AVATAR_SIZE: f32 = 32.;
 const PIN_PADDING: f32 = 12.;
 /// Where a pin's content starts, clear of the avatar in its gutter.
@@ -22,7 +24,8 @@ const CONTENT_INSET: f32 = PIN_PADDING + AVATAR_SIZE + 12.;
 /// and don't shrink to their column, so the popout is as wide as it takes for
 /// that column to hold them: the borders, the list's padding, and the pin's
 /// padding and avatar gutter.
-const WIDTH: f32 = MEDIA_MAX_WIDTH + 2. * 1. + 2. * 8. + 2. * 1. + CONTENT_INSET + PIN_PADDING;
+const WIDTH: f32 =
+    MEDIA_MAX_WIDTH + 2. * 1. + 2. * LIST_GAP + 2. * 1. + CONTENT_INSET + PIN_PADDING;
 
 impl HomeScreen {
     /// The open pins, over the whole app like the emoji picker: a layer that
@@ -65,17 +68,16 @@ impl HomeScreen {
                 .child("This conversation doesn't have any pinned messages... yet.")
                 .into_any_element()
         } else {
+            // A list needs a height to fill rather than taking its content's,
+            // so the popout stands at its full height whatever is pinned.
+            let entity = cx.entity();
             v_flex()
-                .id("pins-list")
-                .max_h(px(MAX_LIST_HEIGHT))
-                .overflow_y_scroll()
-                .p_2()
-                .gap_2()
-                .children(
-                    popup
-                        .messages
-                        .iter()
-                        .map(|message| self.render_pin(message, cx)),
+                .h(px(LIST_HEIGHT))
+                .child(
+                    list(popup.list.clone(), move |ix, _window, cx| {
+                        entity.update(cx, |this, cx| this.render_pin_item(ix, cx))
+                    })
+                    .flex_1(),
                 )
                 .into_any_element()
         };
@@ -137,19 +139,32 @@ impl HomeScreen {
         )
     }
 
+    /// The list's row for the pin at `ix`. The list can't pad or space its
+    /// items, so each row carries the gap above it, and the last the one
+    /// below too.
+    fn render_pin_item(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
+        let Some(popup) = &self.pins_popup else {
+            return div().into_any_element();
+        };
+        let Some(message) = popup.messages.get(ix) else {
+            return div().into_any_element();
+        };
+        div()
+            .px(px(LIST_GAP))
+            .pt(px(LIST_GAP))
+            .when(ix + 1 == popup.messages.len(), |this| this.pb(px(LIST_GAP)))
+            .child(self.render_pin(message, cx))
+            .into_any_element()
+    }
+
     /// One pinned message: who sent it and when, over what it says.
     fn render_pin(&self, message: &discord::Message, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let has_media =
             !message.images.is_empty() || !message.videos.is_empty() || !message.embeds.is_empty();
 
-        // The avatar is laid over a padded gutter rather than set beside the
-        // content in a row: inside a row, the content's text is measured as
-        // if it had no width — a one-line caption wraps a character per line
-        // — and the pin keeps the height of all those lines, empty, below it.
         div()
             .relative()
-            .flex_shrink_0()
             .w_full()
             .p(px(PIN_PADDING))
             .pl(px(CONTENT_INSET))
