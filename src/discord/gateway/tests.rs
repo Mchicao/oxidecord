@@ -439,6 +439,44 @@ fn member_roles_arrive_from_member_chunks_and_messages() {
 }
 
 #[test]
+fn a_message_names_its_author_by_their_nickname() {
+    let events = dispatch_json(
+        "MESSAGE_CREATE",
+        r#"{
+            "id": "500",
+            "channel_id": "100",
+            "guild_id": "10",
+            "author": {"id": "4", "username": "user4", "global_name": "Four", "discriminator": "0", "avatar": null},
+            "member": {"nick": "Quad", "roles": [], "joined_at": "2020-01-01T00:00:00+00:00", "deaf": false, "mute": false, "flags": 0},
+            "content": "hi",
+            "timestamp": "2020-01-01T00:00:00+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false,
+            "type": 0
+        }"#,
+    );
+    // Kept apart from the message, so its fetched history, which carries no
+    // members, can be named the same way.
+    let named = events.iter().find_map(|event| match event {
+        GatewayEvent::Members { guild_id, members } => Some((*guild_id, members)),
+        _ => None,
+    });
+    let Some((guild_id, [member])) = named.map(|(id, members)| (id, members.as_slice())) else {
+        panic!("MESSAGE_CREATE should name its author as a guild member");
+    };
+    assert_eq!(guild_id, Id::new(10));
+    assert_eq!(member.user_id, Id::new(4));
+    assert_eq!(member.name, "Quad");
+    assert_eq!(member.username.as_deref(), Some("user4"));
+}
+
+#[test]
 fn member_list_update_reads_groups_members_and_edits() {
     let events = dispatch_json(
         "GUILD_MEMBER_LIST_UPDATE",

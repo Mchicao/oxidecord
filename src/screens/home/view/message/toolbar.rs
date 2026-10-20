@@ -155,7 +155,9 @@ impl HomeScreen {
             .on_click(cx.listener({
                 let target = ReplyTarget {
                     message_id: message.id,
-                    author_name: message.author_name.clone(),
+                    author_name: self
+                        .author_name(message.author_id, &message.author_name)
+                        .to_owned(),
                 };
                 move |this, _, window, cx| this.start_reply(target.clone(), window, cx)
             }))

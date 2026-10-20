@@ -27,9 +27,12 @@ impl HomeScreen {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
+        let author_name = self
+            .author_name(reference.author_id, &reference.author_name)
+            .to_owned();
 
         let avatar = avatar(
-            reference.author_name.clone(),
+            author_name.clone(),
             reference.author_avatar_url.clone(),
             px(16.),
         );
@@ -67,7 +70,7 @@ impl HomeScreen {
                     .when_some(self.role_color(reference.author_id), |this, color| {
                         this.text_color(rgb(color))
                     })
-                    .child(reference.author_name.clone()),
+                    .child(author_name),
             )
             .child(if reference.content.is_empty() {
                 div()

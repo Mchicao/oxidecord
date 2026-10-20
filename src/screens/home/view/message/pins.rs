@@ -162,6 +162,9 @@ impl HomeScreen {
         let theme = cx.theme();
         let has_media =
             !message.images.is_empty() || !message.videos.is_empty() || !message.embeds.is_empty();
+        let author_name = self
+            .author_name(message.author_id, &message.author_name)
+            .to_owned();
 
         div()
             .relative()
@@ -178,7 +181,7 @@ impl HomeScreen {
                     .top(px(PIN_PADDING))
                     .left(px(PIN_PADDING))
                     .child(avatar(
-                        message.author_name.clone(),
+                        author_name.clone(),
                         message.author_avatar_url.clone(),
                         px(AVATAR_SIZE),
                     )),
@@ -198,7 +201,7 @@ impl HomeScreen {
                                     .when_some(self.role_color(message.author_id), |this, color| {
                                         this.text_color(rgb(color))
                                     })
-                                    .child(message.author_name.clone()),
+                                    .child(author_name),
                             )
                             .child(
                                 div()

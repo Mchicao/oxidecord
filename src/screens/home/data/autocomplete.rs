@@ -240,10 +240,17 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         let known = self.guild_members.entry(guild_id).or_default();
+        let mut changed = false;
         for member in members {
+            // Every live message names its author again, mostly unchanged,
+            // which isn't worth recomputing the suggestions over.
+            changed |= known
+                .get(&member.user_id)
+                .is_none_or(|known| known.name != member.name);
             known.insert(member.user_id, member);
         }
-        if self.selected_guild == Some(guild_id)
+        if changed
+            && self.selected_guild == Some(guild_id)
             && self
                 .autocomplete
                 .as_ref()

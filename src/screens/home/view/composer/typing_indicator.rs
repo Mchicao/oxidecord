@@ -108,7 +108,10 @@ impl HomeScreen {
                             .iter()
                             .rev()
                             .find(|message| message.author_id == typist.user_id)
-                            .map(|message| message.author_name.clone())
+                            .map(|message| {
+                                self.author_name(message.author_id, &message.author_name)
+                                    .to_owned()
+                            })
                     })
                     .unwrap_or_else(|| "Someone".to_owned())
             })

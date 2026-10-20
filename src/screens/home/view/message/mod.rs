@@ -305,9 +305,12 @@ impl HomeScreen {
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
+        let author_name = self
+            .author_name(message.author_id, &message.author_name)
+            .to_owned();
 
         let avatar = avatar(
-            message.author_name.clone(),
+            author_name.clone(),
             message.author_avatar_url.clone(),
             px(AVATAR_SIZE),
         );
@@ -316,7 +319,7 @@ impl HomeScreen {
         // click. Handled on mouse-down rather than click so the card's dismiss
         // layer doesn't see the same press and close it again.
         let author_id = message.author_id;
-        let author_name = message.author_name.clone();
+        let profile_name = author_name.clone();
         let author_avatar_url = message.author_avatar_url.clone();
         let avatar = div()
             .id(("message-avatar", message.id.get()))
@@ -330,7 +333,7 @@ impl HomeScreen {
                     cx.stop_propagation();
                     this.open_profile(
                         author_id,
-                        author_name.clone(),
+                        profile_name.clone(),
                         author_avatar_url.clone(),
                         event.position,
                         cx,
@@ -359,7 +362,7 @@ impl HomeScreen {
                                     .when_some(self.role_color(author_id), |this, color| {
                                         this.text_color(rgb(color))
                                     })
-                                    .child(message.author_name.clone()),
+                                    .child(author_name),
                             )
                             .child(
                                 div()

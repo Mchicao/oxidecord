@@ -39,7 +39,7 @@ pub(super) use channel::{convert_channel, convert_dms};
 pub(super) use emoji::{RawEmoji, convert_guild_emoji};
 pub(super) use guild::{RawMember, RawRole, convert_guild, convert_role};
 pub(super) use member_list::{RawMemberListUpdate, convert_member_list_update};
-pub(super) use message::{RawPins, convert_message, convert_reaction_emoji};
+pub(super) use message::{RawPins, author_member, convert_message, convert_reaction_emoji};
 pub(super) use read_state::{
     RawChannelUnread, RawGuildChannel, RawGuildSettings, RawReadState, convert_channel_unreads,
     convert_guild_channels, convert_mute_settings, convert_read_states, versioned_list,

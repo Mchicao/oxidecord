@@ -11,6 +11,7 @@ use twilight_model::id::{
 
 use super::cdn;
 use super::embed::{Embed, convert_embed};
+use super::guild::GuildMember;
 use super::markdown::{self, Inline, Markdown};
 use super::time::{format_local_full, format_message_time};
 use super::user::{CurrentUser, small_avatar_url};
@@ -320,14 +321,38 @@ pub(in crate::discord) struct RawPin {
     pub message: twilight_model::channel::Message,
 }
 
+/// Who a guild message's author is there, from the member Discord sends along
+/// with it. Only gateway dispatches carry one: fetched history doesn't, and
+/// webhooks aren't members.
+pub(in crate::discord) fn author_member(
+    message: &twilight_model::channel::Message,
+) -> Option<GuildMember> {
+    let member = message.member.as_ref()?;
+    message.guild_id?;
+    let author = &message.author;
+    let name = [member.nick.as_ref(), author.global_name.as_ref()]
+        .into_iter()
+        .flatten()
+        .find(|name| !name.is_empty())
+        .unwrap_or(&author.name);
+    Some(GuildMember {
+        user_id: author.id,
+        name: name.clone(),
+        username: Some(author.name.clone()).filter(|name| !name.is_empty()),
+        avatar_url: small_avatar_url(author),
+    })
+}
+
 pub(in crate::discord) fn convert_message(message: twilight_model::channel::Message) -> Message {
     let author_avatar_url = small_avatar_url(&message.author);
     // Prefer the author's per-guild nickname, then their global display name,
-    // then their username. `member` is present on messages fetched from a
-    // guild channel but not on ones we just sent, hence the fallbacks.
+    // then their username. Only gateway dispatches carry `member`: fetched
+    // history and the response to a send don't, so the view names authors by
+    // the guild's members where it knows them.
     let author_name = message
         .member
         .and_then(|member| member.nick)
+        .filter(|nick| !nick.is_empty())
         .or(message.author.global_name)
         .unwrap_or_else(|| message.author.name.clone());
     let (images, videos) = convert_attachments(&message.attachments);

@@ -9,7 +9,7 @@ use twilight_model::util::Timestamp;
 
 use crate::discord::model::{
     RawEmoji, RawGuildChannel, RawGuildSettings, RawMember, RawMemberListUpdate, RawRole,
-    RawVoiceServer, RawVoiceState, StreamServerInfo, convert_call_voice_states,
+    RawVoiceServer, RawVoiceState, StreamServerInfo, author_member, convert_call_voice_states,
     convert_channel_unreads, convert_guild_channels, convert_guild_emoji,
     convert_guild_voice_states, convert_member_list_update, convert_message, convert_mute_settings,
     convert_reaction_emoji, convert_read_states, convert_role, convert_stream_server,
@@ -300,7 +300,19 @@ pub(super) fn dispatch(
             })
             .unwrap_or_default(),
         "GUILD_MEMBER_UPDATE" => serde_json::from_str::<MemberUpdatePayload>(data)
-            .map(|update| member_roles(update.guild_id, vec![update.member]).collect())
+            .map(|update| {
+                // A changed nickname renames them in messages already drawn.
+                let named = update
+                    .member
+                    .guild_member()
+                    .map(|member| GatewayEvent::Members {
+                        guild_id: update.guild_id,
+                        members: vec![member],
+                    });
+                member_roles(update.guild_id, vec![update.member])
+                    .chain(named)
+                    .collect()
+            })
             .unwrap_or_default(),
         "GUILD_MEMBERS_CHUNK" => serde_json::from_str::<MembersChunkPayload>(data)
             .map(|chunk| {
@@ -425,14 +437,24 @@ fn member_roles(
     })
 }
 
-/// The roles of a guild message's author, from the member Discord sends along
-/// with it. Webhooks aren't members, so their messages have none.
-fn author_roles(message: &twilight_model::channel::Message) -> Option<GatewayEvent> {
-    Some(GatewayEvent::MemberRoles {
-        guild_id: message.guild_id?,
+/// The roles and name of a guild message's author, from the member Discord
+/// sends along with it. Webhooks aren't members, so their messages have none.
+/// The name is kept because fetched history carries no members, and without
+/// it the same author's older messages would show their global name.
+fn author_roles(message: &twilight_model::channel::Message) -> Vec<GatewayEvent> {
+    let (Some(guild_id), Some(member)) = (message.guild_id, message.member.as_ref()) else {
+        return Vec::new();
+    };
+    let roles = GatewayEvent::MemberRoles {
+        guild_id,
         user_id: message.author.id,
-        roles: message.member.as_ref()?.roles.clone(),
-    })
+        roles: member.roles.clone(),
+    };
+    let named = author_member(message).map(|member| GatewayEvent::Members {
+        guild_id,
+        members: vec![member],
+    });
+    std::iter::once(roles).chain(named).collect()
 }
 
 /// A guild's roles and its members' as events. An unavailable guild in

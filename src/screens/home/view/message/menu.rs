@@ -28,7 +28,9 @@ impl MessageMenu {
             message_id: message.id,
             reply: ReplyTarget {
                 message_id: message.id,
-                author_name: message.author_name.clone(),
+                author_name: screen
+                    .author_name(message.author_id, &message.author_name)
+                    .to_owned(),
             },
             // Already open for editing, the action would have nothing to do.
             can_edit: screen.is_own_message(message)
