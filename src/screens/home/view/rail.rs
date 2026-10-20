@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, avatar::Avatar, divider::Divider, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, avatar::Avatar, h_flex, separator::Separator, v_flex,
 };
 
 use crate::assets::icons::DISCORD_ICON;
@@ -75,7 +75,7 @@ impl HomeScreen {
                         this.open_direct_messages(window, cx);
                     })),
             )
-            .child(Divider::horizontal().w(px(32.)))
+            .child(Separator::horizontal().w(px(32.)))
             .children(self.rail_entries.iter().map(|entry| match entry {
                 RailEntry::Guild(guild) => self.render_rail_guild(guild, cx).into_any_element(),
                 RailEntry::Folder(folder) => self.render_rail_folder(folder, cx).into_any_element(),

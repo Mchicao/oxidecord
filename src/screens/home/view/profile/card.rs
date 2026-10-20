@@ -2,7 +2,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, divider::Divider, h_flex, skeleton::Skeleton, v_flex};
+use gpui_component::{ActiveTheme as _, h_flex, separator::Separator, skeleton::Skeleton, v_flex};
 
 use crate::discord::UserProfile;
 use crate::screens::home::view::avatar;
@@ -220,7 +220,7 @@ fn render_details(profile: &UserProfile, cx: &App) -> AnyElement {
                     .into_any_element(),
                 cx,
             ))
-            .child(Divider::horizontal())
+            .child(Separator::horizontal())
         })
         .child(section(
             "MEMBER SINCE",

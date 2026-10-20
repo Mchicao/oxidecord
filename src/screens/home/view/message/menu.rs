@@ -150,7 +150,7 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         self.replying_to = Some(target);
-        self.message_input.focus_handle(cx).focus(window);
+        self.message_input.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 

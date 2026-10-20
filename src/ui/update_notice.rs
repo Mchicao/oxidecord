@@ -136,7 +136,13 @@ fn content(status: &Status, cx: &App) -> AnyElement {
                 Status::Downloading { percent, .. } => Some(*percent),
                 _ => None,
             },
-            |this, percent| this.child(Progress::new().mt_1().value(percent.into())),
+            |this, percent| {
+                this.child(
+                    Progress::new("update-progress")
+                        .mt_1()
+                        .value(percent.into()),
+                )
+            },
         )
         .when_some(action, |this, action| {
             this.child(h_flex().mt_2().child(action.small()))

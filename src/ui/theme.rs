@@ -27,6 +27,10 @@ const DEFAULT_PRESET: &str = "Zinc";
 const RADIUS: Pixels = px(8.);
 const RADIUS_LG: Pixels = px(14.);
 
+/// Where the toast stack starts, clear of the window controls drawn into the
+/// top-right of every screen's header.
+const NOTIFICATION_TOP: Pixels = px(68.);
+
 /// Every theme the settings page can switch to, in the order it lists them.
 pub struct Themes {
     presets: Vec<Rc<ThemeConfig>>,
@@ -125,6 +129,7 @@ fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) {
     if config.radius_lg.is_none() {
         theme.radius_lg = RADIUS_LG;
     }
+    theme.notification.margins.top = NOTIFICATION_TOP;
 
     // Colours are read straight out of the global during render, so every open
     // window has to be repainted, not just the one the click came from.

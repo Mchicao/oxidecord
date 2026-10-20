@@ -128,7 +128,7 @@ impl HomeScreen {
                     )
                     .child(
                         anchored()
-                            .anchor(Corner::TopRight)
+                            .anchor(Anchor::TopRight)
                             .position(popup.position)
                             .snap_to_window_with_margin(px(8.))
                             .child(card),

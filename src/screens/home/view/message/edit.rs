@@ -2,7 +2,7 @@
 //! edited, with Discord's "escape to cancel • enter to save" hint under it.
 
 use gpui::*;
-use gpui_component::input::{self, Input};
+use gpui_component::input::{self, Textarea};
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 
 use crate::screens::home::view::composer::surface;
@@ -41,13 +41,7 @@ impl HomeScreen {
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
                 this.cancel_edit(window, cx);
             }))
-            .child(
-                surface(div(), cx).child(
-                    Input::new(&editing.input)
-                        .appearance(false)
-                        .focus_bordered(false),
-                ),
-            )
+            .child(surface(div(), cx).child(Textarea::new(&editing.input).appearance(false)))
             .child(
                 h_flex()
                     .gap_1()

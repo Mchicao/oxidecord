@@ -33,10 +33,6 @@ impl ReqwestClient {
 }
 
 impl HttpClient for ReqwestClient {
-    fn type_name(&self) -> &'static str {
-        "ReqwestClient"
-    }
-
     fn user_agent(&self) -> Option<&HeaderValue> {
         Some(&self.user_agent)
     }

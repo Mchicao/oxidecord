@@ -1,16 +1,11 @@
 //! The main window's router.
 
 use gpui::*;
-use gpui_component::Root;
 
 use crate::discord;
 use crate::screens::home::{HomeScreen, SessionEnded};
 use crate::screens::login::LoginScreen;
 use crate::ui::{dialogs, update_notice};
-
-/// Where the toast stack starts, clear of the window controls drawn into the
-/// top-right of every screen's header.
-const NOTIFICATION_TOP: f32 = 52.;
 
 enum Route {
     Login(Entity<LoginScreen>),
@@ -79,19 +74,10 @@ impl Render for AppScreen {
             Route::Home { screen: view, .. } => view.clone().into_any_element(),
         };
 
-        // Every screen sits under the same modal layer, so a dialog opened
-        // anywhere in the app is drawn (and backed by its scrim) here. Toasts
-        // go over the lot, since one can matter while a dialog is up.
-        div()
-            .relative()
-            .size_full()
-            .child(dialogs::with_dialog_layer(screen, window, cx))
-            .children(Root::render_notification_layer(window, cx).map(|layer| {
-                div()
-                    .absolute()
-                    .top(px(NOTIFICATION_TOP))
-                    .right_0()
-                    .child(layer)
-            }))
+        // Every screen sits under the same modal backdrop, so a dialog opened
+        // anywhere in the app is backed by its scrim. The root draws dialogs
+        // and toasts over that, toasts on top, since one can matter while a
+        // dialog is up.
+        dialogs::with_dialog_layer(screen, window, cx)
     }
 }

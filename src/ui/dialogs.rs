@@ -1,14 +1,14 @@
 //! Modal dialogs shared across screens, plus the backdrop drawn behind them.
 //!
-//! Dialogs are opened through gpui-component's [`Root`], which collects them but
-//! doesn't draw them; [`with_dialog_layer`] renders that layer over the app and
-//! pushes the content behind it back, so a modal reads as being in front of the
-//! app rather than floating somewhere inside it.
+//! Dialogs are opened through gpui-component's [`Root`](gpui_component::Root),
+//! which draws them over the whole window; [`with_dialog_layer`] pushes the
+//! content behind them back, so a modal reads as being in front of the app
+//! rather than floating somewhere inside it.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Root, WindowExt as _, button::ButtonVariant,
+    ActiveTheme as _, Icon, IconName, WindowExt as _, button::ButtonVariant,
     dialog::DialogButtonProps, h_flex, v_flex,
 };
 
@@ -23,9 +23,10 @@ const BACKDROP_SCRIM_ALPHA: f32 = 0.3;
 /// bad multi-select can't grow the dialog past the bottom of the window.
 const MAX_LISTED_PROBLEMS: usize = 6;
 
-/// Renders `content` with the modal layer above it: while a dialog is open the
-/// content is faded and covered by a scrim, then the dialog itself is drawn on
-/// top. With no dialog open this is just `content`, with nothing painted over it.
+/// Renders `content` as the backdrop of the modal layer: while a dialog is open
+/// the content is faded and covered by a scrim, under the dialog the root draws
+/// on top. With no dialog open this is just `content`, with nothing painted over
+/// it.
 pub fn with_dialog_layer(
     content: AnyElement,
     window: &mut Window,
@@ -52,11 +53,10 @@ pub fn with_dialog_layer(
                     .bg(black().opacity(BACKDROP_SCRIM_ALPHA)),
             )
         })
-        .children(Root::render_dialog_layer(window, cx))
 }
 
 /// Shows a modal error dialog: a titled danger icon over one line per problem,
-/// dismissed with a button, the escape key, or a click outside.
+/// dismissed with a button or the escape key.
 pub fn show_error(
     title: impl Into<SharedString>,
     problems: impl IntoIterator<Item = impl Into<SharedString>>,
@@ -68,19 +68,15 @@ pub fn show_error(
     let hidden = problems.len().saturating_sub(MAX_LISTED_PROBLEMS);
     let listed: Vec<SharedString> = problems.into_iter().take(MAX_LISTED_PROBLEMS).collect();
 
-    window.open_dialog(cx, move |dialog, _window, cx| {
+    window.open_alert_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         // One problem reads as a sentence; several read as a list, so only the
         // list gets bullets.
         let bulleted = listed.len() > 1;
 
         dialog
-            .alert()
-            // An error is a notification, not a decision, so let a click
-            // outside dismiss it as well — `alert()` turns that off.
-            .overlay_closable(true)
             .border_color(depth::ring(cx))
-            .w(px(440.))
+            .width(px(440.))
             .button_props(
                 DialogButtonProps::default()
                     .ok_text("Dismiss")
@@ -145,14 +141,13 @@ pub fn show_error(
 /// so the dialog shows where it really goes, as Discord does.
 pub fn confirm_open_link(url: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
     let url: SharedString = url.into();
-    window.open_dialog(cx, move |dialog, _window, cx| {
+    window.open_alert_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         let target = url.clone();
         dialog
             .confirm()
-            .overlay_closable(true)
             .border_color(depth::ring(cx))
-            .w(px(440.))
+            .width(px(440.))
             .button_props(
                 DialogButtonProps::default()
                     .ok_text("Visit Site")

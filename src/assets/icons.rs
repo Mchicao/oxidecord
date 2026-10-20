@@ -1,6 +1,6 @@
 //! SVG markup the app ships itself.
 
-/// Lucide icons the app needs that gpui-component-assets doesn't bundle.
+/// Lucide icons the app needs that gpui-kit-assets doesn't bundle.
 /// Stroke-based with `currentColor`, so they tint with the text color.
 pub(super) const EXTRA_ICONS: &[(&str, &str)] = &[
     (

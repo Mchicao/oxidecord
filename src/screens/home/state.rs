@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::{InputEvent, InputState, TextareaState};
 use gpui_component::slider::SliderState;
 use twilight_model::id::{
     Id,
@@ -77,7 +77,7 @@ pub(super) struct Typist {
 /// one comes with no leftover undo history from the last.
 pub(super) struct EditingMessage {
     pub message_id: Id<MessageMarker>,
-    pub input: Entity<InputState>,
+    pub input: Entity<TextareaState>,
 }
 
 /// The open profile popout: which user it's for, where it's anchored, and the
@@ -456,7 +456,7 @@ pub struct HomeScreen {
     /// gives each one. Cleared with the conversation, as Discord hides them
     /// again once you leave.
     pub(super) revealed_spoilers: HashSet<SharedString>,
-    pub(super) message_input: Entity<InputState>,
+    pub(super) message_input: Entity<TextareaState>,
     /// The conversation the typing indicator was last sent to, and when.
     pub(super) typing_sent: Option<(Id<ChannelMarker>, Instant)>,
     pub(super) typists: HashMap<Id<ChannelMarker>, Vec<Typist>>,
@@ -493,7 +493,7 @@ impl HomeScreen {
         // rebound to send (see `SendMessage`); the input's `PressEnter` event
         // can't be used for that, since it fires for the newlines too.
         let message_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .auto_grow(1, COMPOSER_MAX_ROWS)
                 .placeholder("Send a message")
         });
@@ -637,7 +637,7 @@ impl HomeScreen {
         this.start_gateway(window, cx);
         // Seeds the focus path so the root element's key listeners are live
         // from the first frame, before anything has been clicked.
-        this.focus_handle.focus(window);
+        this.focus_handle.focus(window, cx);
         this
     }
 }

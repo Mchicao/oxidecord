@@ -8,7 +8,7 @@ use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::button::ButtonVariant;
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::{InputState, Position};
+use gpui_component::input::{Position, TextareaState};
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
@@ -65,7 +65,7 @@ impl HomeScreen {
             last_line.chars().count() as u32,
         );
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .auto_grow(1, EDIT_MAX_ROWS)
                 .default_value(content)
         });
@@ -86,7 +86,7 @@ impl HomeScreen {
         if self.editing.take().is_none() {
             return;
         }
-        self.message_input.focus_handle(cx).focus(window);
+        self.message_input.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
@@ -135,7 +135,7 @@ impl HomeScreen {
             .map(|elapsed| elapsed.as_secs() as i64);
         self.editing = None;
         self.send_error = None;
-        self.message_input.focus_handle(cx).focus(window);
+        self.message_input.focus_handle(cx).focus(window, cx);
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -179,12 +179,12 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         let screen = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _window, cx| {
+        window.open_alert_dialog(cx, move |dialog, _window, cx| {
             let screen = screen.clone();
             dialog
                 .confirm()
                 .border_color(depth::ring(cx))
-                .w(px(440.))
+                .width(px(440.))
                 .title("Delete Message")
                 .child("Are you sure you want to delete this message?")
                 .button_props(

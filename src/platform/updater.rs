@@ -122,7 +122,7 @@ pub fn check(cx: &mut App) {
         let result = runtime::run(fetch_latest())
             .await
             .unwrap_or_else(|_| Err("the check was cut short".into()));
-        _ = cx.update(|cx| {
+        cx.update(|cx| {
             let status = match result {
                 Ok(Some(release)) => Status::Available {
                     version: release.version.into(),
@@ -174,7 +174,7 @@ pub fn download(cx: &mut App) {
 
         while let Some(progress) = rx.next().await {
             let version = version.clone();
-            let updated = cx.update(|cx| {
+            cx.update(|cx| {
                 let status = match progress {
                     Progress::Percent(percent) => Status::Downloading { version, percent },
                     Progress::Done(Ok(())) => Status::Ready { version },
@@ -182,9 +182,6 @@ pub fn download(cx: &mut App) {
                 };
                 set_status(status, cx);
             });
-            if updated.is_err() {
-                break;
-            }
         }
     })
     .detach();

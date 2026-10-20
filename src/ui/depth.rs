@@ -61,6 +61,7 @@ pub fn shadow(level: Level, cx: &App) -> Vec<BoxShadow> {
         offset: point(px(0.), px(y)),
         blur_radius: px(blur),
         spread_radius: px(spread),
+        inset: false,
     };
 
     match (level, dark) {
@@ -198,12 +199,14 @@ pub fn media_shadow() -> Vec<BoxShadow> {
             offset: point(px(0.), px(1.)),
             blur_radius: px(2.),
             spread_radius: px(0.),
+            inset: false,
         },
         BoxShadow {
             color: black_a(0.12),
             offset: point(px(0.), px(2.)),
             blur_radius: px(5.),
             spread_radius: px(-2.),
+            inset: false,
         },
     ]
 }

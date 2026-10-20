@@ -33,8 +33,8 @@ impl HomeScreen {
         let picker = self.emoji_picker.as_ref()?;
         let theme = cx.theme();
         let (corner, offset) = match picker.target {
-            EmojiTarget::Composer => (Corner::BottomRight, point(px(16.), px(-24.))),
-            EmojiTarget::Reaction(_) => (Corner::TopRight, point(px(-24.), px(-16.))),
+            EmojiTarget::Composer => (Anchor::BottomRight, point(px(16.), px(-24.))),
+            EmojiTarget::Reaction(_) => (Anchor::TopRight, point(px(-24.), px(-16.))),
         };
 
         let list = if picker.rows.is_empty() {
@@ -53,7 +53,7 @@ impl HomeScreen {
                 picker.rows.len(),
                 cx.processor(|this, range: Range<usize>, _, cx| this.render_picker_rows(range, cx)),
             )
-            .track_scroll(picker.scroll.clone())
+            .track_scroll(&picker.scroll)
             .size_full()
             .into_any_element()
         };

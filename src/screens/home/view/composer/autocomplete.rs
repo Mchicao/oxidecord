@@ -164,7 +164,7 @@ impl HomeScreen {
             )
             .children(detail.map(|detail| {
                 div()
-                    .flex_shrink()
+                    .flex_shrink(1.)
                     .min_w_0()
                     // Room for `@everyone`'s description, which is long.
                     .max_w(relative(0.6))

@@ -59,7 +59,7 @@ impl HomeScreen {
                     this.render_member_rows(range, cx)
                 }),
             )
-            .track_scroll(list.scroll.clone())
+            .track_scroll(&list.scroll)
             .size_full()
             .pb_2()
             .into_any_element()

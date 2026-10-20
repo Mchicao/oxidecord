@@ -3,8 +3,8 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::webview::WebView;
-use gpui_component::wry::WebViewBuilder;
+use gpui_wry::WebView;
+use wry::WebViewBuilder;
 
 use crate::discord;
 use crate::screens::app::AppScreen;
@@ -91,7 +91,7 @@ impl LoginWebview {
                             let async_cx_inner = async_cx_capture.clone();
                             let app_inner = app_capture.clone();
 
-                            let _ = async_cx_inner.update(move |cx| {
+                            async_cx_inner.update(move |cx| {
                                 let _ = cx.update_window(main_window, |_, window, cx| {
                                     let _ =
                                         app_inner.update(cx, |app, cx| app.show_home(window, cx));
@@ -112,7 +112,7 @@ impl LoginWebview {
                 })
             });
 
-            if let Ok(Ok(webview)) = result {
+            if let Ok(webview) = result {
                 let _ = this.update(cx, |this, cx| {
                     this.webview = Some(webview);
                     cx.notify();

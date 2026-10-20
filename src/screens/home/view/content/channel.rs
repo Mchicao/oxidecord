@@ -3,7 +3,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, Selectable as _, Sizable as _, divider::Divider, h_flex, v_flex,
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, separator::Separator, v_flex,
 };
 
 use crate::discord::Channel;
@@ -70,7 +70,7 @@ impl HomeScreen {
                         .child(channel.name.clone()),
                 )
                 .when_some(channel.topic.as_ref(), |this, topic| {
-                    this.child(Divider::vertical().h(px(24.))).child(
+                    this.child(Separator::vertical().h(px(24.))).child(
                         div()
                             .flex_1()
                             .min_w_0()

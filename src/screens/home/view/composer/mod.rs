@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, Size, StyleSized as _, h_flex,
-    input::Input, v_flex,
+    input::Textarea, v_flex,
 };
 
 use crate::screens::home::{COMPOSER_CONTEXT, EmojiTarget, HomeScreen, SendMessage};
@@ -129,9 +129,8 @@ impl HomeScreen {
                                     .on_action(cx.listener(Self::on_autocomplete_accept))
                                     .on_action(cx.listener(Self::on_autocomplete_escape))
                                     .child(
-                                        Input::new(&self.message_input)
+                                        Textarea::new(&self.message_input)
                                             .appearance(false)
-                                            .focus_bordered(false)
                                             // A multi-line input sizes to its
                                             // padding and rows, not a fixed
                                             // height. This pads one line out
@@ -177,9 +176,9 @@ impl HomeScreen {
 /// Discord's.
 const COMPOSER_LINE_HEIGHT: Pixels = px(44.);
 
-/// The input's vertical padding: centres a medium input's 20px line in
-/// `COMPOSER_LINE_HEIGHT`.
-const COMPOSER_PADDING_Y: Pixels = px(12.);
+/// Padding around the input that, on top of the editor's own medium inset,
+/// centres a medium input's 20px line in `COMPOSER_LINE_HEIGHT`.
+const COMPOSER_PADDING_Y: Pixels = px(4.);
 
 /// The composer's surface. Flat, unlike the buttons around it: a shadow made
 /// the input read as a box sitting on the page rather than a field. Dark themes

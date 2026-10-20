@@ -44,8 +44,10 @@ impl HomeScreen {
         cx.subscribe_in(
             &scrubber,
             window,
-            |this, _, SliderEvent::Change(value), _window, cx| {
-                this.seek_video(value.start(), cx);
+            |this, _, event: &SliderEvent, _window, cx| {
+                if let SliderEvent::Change(value) = event {
+                    this.seek_video(value.start(), cx);
+                }
             },
         )
         .detach();

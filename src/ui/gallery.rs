@@ -13,13 +13,13 @@ use gpui_component::{
     avatar::{Avatar, AvatarGroup},
     badge::Badge,
     checkbox::Checkbox,
-    divider::Divider,
     h_flex,
     input::{Input, InputState},
     kbd::Kbd,
     label::Label,
     progress::Progress,
     radio::{Radio, RadioGroup},
+    separator::Separator,
     setting::{RenderOptions, SettingGroup, SettingItem, SettingPage},
     skeleton::Skeleton,
     slider::{Slider, SliderState},
@@ -119,7 +119,7 @@ fn store<T: Copy + 'static>(state: &Entity<T>) -> impl Fn(&T, &mut Window, &mut 
 
 macro_rules! tokens {
     ($theme:expr; $($name:ident),* $(,)?) => {
-        vec![$((stringify!($name), $theme.$name)),*]
+        vec![$((stringify!($name), $theme.colors.$name)),*]
     };
 }
 
@@ -558,9 +558,9 @@ fn feedback(_: &mut Window, cx: &mut App) -> Div {
     let progress = v_flex()
         .w(px(FIELD_WIDTH))
         .gap_3()
-        .child(Progress::new().value(0.))
-        .child(Progress::new().value(35.))
-        .child(Progress::new().value(100.));
+        .child(Progress::new("progress-0").value(0.))
+        .child(Progress::new("progress-35").value(35.))
+        .child(Progress::new("progress-100").value(100.));
 
     let skeleton = h_flex()
         .gap_3()
@@ -584,15 +584,15 @@ fn feedback(_: &mut Window, cx: &mut App) -> Div {
     let dividers = v_flex()
         .w(px(FIELD_WIDTH * 1.5))
         .gap_4()
-        .child(Divider::horizontal())
-        .child(Divider::horizontal().label("Labelled"))
-        .child(Divider::horizontal_dashed())
+        .child(Separator::horizontal())
+        .child(Separator::horizontal().label("Labelled"))
+        .child(Separator::horizontal_dashed())
         .child(
             h_flex()
                 .h_6()
                 .gap_3()
                 .child("Left")
-                .child(Divider::vertical())
+                .child(Separator::vertical())
                 .child("Right"),
         );
 

@@ -175,7 +175,7 @@ impl HomeScreen {
         Popover::new(("message-more-menu", message_id.get()))
             .appearance(false)
             .overlay_closable(false)
-            .anchor(Corner::TopRight)
+            .anchor(Anchor::TopRight)
             .trigger(
                 Button::new(("message-more", message_id.get()))
                     .icon(IconName::Ellipsis)
@@ -196,7 +196,7 @@ impl HomeScreen {
                 let build = build.clone();
                 let menu = PopupMenu::build(window, cx, move |menu, _, cx| build(menu, cx));
                 menu_state.update(cx, |state, _| *state = Some(menu.clone()));
-                menu.focus_handle(cx).focus(window);
+                menu.focus_handle(cx).focus(window, cx);
                 let popover = cx.entity();
                 window
                     .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {

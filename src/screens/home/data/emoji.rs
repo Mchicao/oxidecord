@@ -66,7 +66,7 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         if self.emoji_picker.take().is_some() {
-            self.message_input.focus_handle(cx).focus(window);
+            self.message_input.focus_handle(cx).focus(window, cx);
             cx.notify();
         }
     }

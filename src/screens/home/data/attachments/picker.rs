@@ -48,18 +48,6 @@ pub(super) fn oversize_message(subject: &str, size: u64) -> String {
     )
 }
 
-pub(super) fn image_extension(format: ImageFormat) -> &'static str {
-    match format {
-        ImageFormat::Png => "png",
-        ImageFormat::Jpeg => "jpg",
-        ImageFormat::Webp => "webp",
-        ImageFormat::Gif => "gif",
-        ImageFormat::Svg => "svg",
-        ImageFormat::Bmp => "bmp",
-        ImageFormat::Tiff => "tiff",
-    }
-}
-
 /// The image format for a path's extension. Anything else is staged as a plain
 /// file rather than a thumbnail.
 fn image_format_from_path(path: &Path) -> Option<ImageFormat> {

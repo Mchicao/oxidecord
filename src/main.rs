@@ -32,7 +32,7 @@ fn main() {
     unsafe {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
-    let app = Application::new()
+    let app = gpui_platform::application()
         .with_assets(assets::Assets)
         .with_http_client(Arc::new(platform::http::ReqwestClient::new()));
 
@@ -60,12 +60,18 @@ fn main() {
             KeyBinding::new("enter", SaveEdit, Some(&edit_input)),
             KeyBinding::new(
                 "shift-enter",
-                input::Enter { secondary: false },
+                input::Enter {
+                    secondary: false,
+                    shift: true,
+                },
                 Some(&composer_input),
             ),
             KeyBinding::new(
                 "shift-enter",
-                input::Enter { secondary: false },
+                input::Enter {
+                    secondary: false,
+                    shift: true,
+                },
                 Some(&edit_input),
             ),
             KeyBinding::new("up", EditLastMessage, Some(&composer_input)),

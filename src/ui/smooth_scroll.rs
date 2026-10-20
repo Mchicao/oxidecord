@@ -61,13 +61,13 @@ impl Surface {
 
     fn min_offset(&self) -> Pixels {
         match self {
-            Self::Div(handle) => -handle.max_offset().height,
+            Self::Div(handle) => -handle.max_offset().y,
             // Has to match the setter's own clamp to the last float, or a target
             // of `min_offset` stops short of the bottom and the list never
             // repins. It only does while the list element carries no padding:
             // the setter counts padding in the scrollable range and this getter
             // doesn't, so `py_2` there would leave us 16px short forever.
-            Self::List(state) => -state.max_offset_for_scrollbar().height,
+            Self::List(state) => -state.max_offset_for_scrollbar().y,
         }
     }
 }

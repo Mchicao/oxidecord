@@ -303,9 +303,14 @@ impl Element for RichText {
         if let Some(marker) = &self.shaped_marker
             && let Some(origin) = marker.origin
         {
-            let _ = marker
-                .line
-                .paint(origin, self.layout.line_height(), window, cx);
+            let _ = marker.line.paint(
+                origin,
+                self.layout.line_height(),
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
         }
     }
 }

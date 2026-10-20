@@ -14,7 +14,7 @@ use crate::ui::dialogs::show_error;
 
 pub(crate) use pending::{AttachmentData, PendingAttachment, format_size};
 
-use picker::{image_extension, oversize_message, read_picked_file};
+use picker::{oversize_message, read_picked_file};
 
 impl HomeScreen {
     /// Handles the paste shortcut in the composer. If the clipboard holds an
@@ -67,7 +67,7 @@ impl HomeScreen {
             }
 
             let id = self.reserve_attachment_id();
-            let filename = format!("image-{id}.{}", image_extension(image.format));
+            let filename = format!("image-{id}.{}", image.format.extension());
             self.pending_attachments.push(PendingAttachment {
                 id,
                 filename,

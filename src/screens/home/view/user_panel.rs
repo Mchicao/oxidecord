@@ -73,7 +73,7 @@ impl HomeScreen {
                             .child(username),
                     ),
             )
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, cx| {
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, cx| {
                 let popover = cx.theme().popover;
                 PresenceStatus::ALL.into_iter().fold(menu, |menu, option| {
                     let screen = screen.clone();
