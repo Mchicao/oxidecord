@@ -11,10 +11,18 @@ use crate::screens::home::view::avatar;
 use crate::ui::depth::{self, Level, radius};
 
 use super::super::markdown::MarkdownOptions;
+use super::MEDIA_MAX_WIDTH;
 
-const WIDTH: f32 = 420.;
 const MAX_LIST_HEIGHT: f32 = 480.;
 const AVATAR_SIZE: f32 = 32.;
+const PIN_PADDING: f32 = 12.;
+/// Where a pin's content starts, clear of the avatar in its gutter.
+const CONTENT_INSET: f32 = PIN_PADDING + AVATAR_SIZE + 12.;
+/// Images and videos are laid out at a fixed size up to [`MEDIA_MAX_WIDTH`],
+/// and don't shrink to their column, so the popout is as wide as it takes for
+/// that column to hold them: the borders, the list's padding, and the pin's
+/// padding and avatar gutter.
+const WIDTH: f32 = MEDIA_MAX_WIDTH + 2. * 1. + 2. * 8. + 2. * 1. + CONTENT_INSET + PIN_PADDING;
 
 impl HomeScreen {
     /// The open pins, over the whole app like the emoji picker: a layer that
@@ -135,28 +143,34 @@ impl HomeScreen {
         let has_media =
             !message.images.is_empty() || !message.videos.is_empty() || !message.embeds.is_empty();
 
-        h_flex()
+        // The avatar is laid over a padded gutter rather than set beside the
+        // content in a row: inside a row, the content's text is measured as
+        // if it had no width — a one-line caption wraps a character per line
+        // — and the pin keeps the height of all those lines, empty, below it.
+        div()
+            .relative()
             .flex_shrink_0()
             .w_full()
-            .items_start()
-            .gap_3()
-            .p_3()
+            .p(px(PIN_PADDING))
+            .pl(px(CONTENT_INSET))
             .rounded(radius::ITEM)
             .bg(theme.background)
             .border_1()
             .border_color(theme.border)
             .child(
-                avatar(
-                    message.author_name.clone(),
-                    message.author_avatar_url.clone(),
-                    px(AVATAR_SIZE),
-                )
-                .flex_shrink_0(),
+                div()
+                    .absolute()
+                    .top(px(PIN_PADDING))
+                    .left(px(PIN_PADDING))
+                    .child(avatar(
+                        message.author_name.clone(),
+                        message.author_avatar_url.clone(),
+                        px(AVATAR_SIZE),
+                    )),
             )
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
+                    .w_full()
                     .gap_1()
                     .child(
                         h_flex()
