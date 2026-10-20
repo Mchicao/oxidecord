@@ -15,7 +15,7 @@ use crate::screens::home::view::{GROUP_GAP, MESSAGE_PADDING_X};
 
 /// Space under the newest message, on top of the list's own padding, so it
 /// doesn't sit flush against the composer.
-const NEWEST_MESSAGE_GAP: f32 = 16.;
+const NEWEST_MESSAGE_GAP: f32 = 12.;
 
 /// The red rule Discord draws above the first message the user hasn't read.
 fn new_messages_divider(cx: &App) -> impl IntoElement {
