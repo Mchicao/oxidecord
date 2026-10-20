@@ -16,7 +16,9 @@ use twilight_model::id::{
 };
 
 use crate::discord::{self, ChannelKind};
-use crate::screens::home::autocomplete::{LIMIT, Suggestion, Trigger, best, match_rank, word_at};
+use crate::screens::home::autocomplete::{
+    Broadcast, LIMIT, Suggestion, Trigger, best, match_rank, word_at,
+};
 use crate::screens::home::emoji::{PickerEmoji, unicode_emojis};
 use crate::screens::home::{
     Autocomplete, AutocompleteAccept, AutocompleteNext, AutocompletePrevious, HomeScreen, View,
@@ -179,6 +181,7 @@ impl HomeScreen {
             Suggestion::Channel { id, name, .. } => {
                 self.remember_mention(format!("#{name}"), format!("<#{id}>"))
             }
+            Suggestion::Broadcast(broadcast) => broadcast.text().to_string(),
             Suggestion::Emoji { emoji, .. } => {
                 let Some(text) = self.composer_emoji_text(emoji) else {
                     return;
@@ -324,7 +327,26 @@ impl HomeScreen {
         if let Some(user) = &self.current_user {
             offer(user.id, &user.name, user.avatar_url.as_ref());
         }
-        best(ranked)
+        let mut suggestions = best(ranked);
+        suggestions.extend(self.broadcast_suggestions(query));
+        suggestions
+    }
+
+    /// `@everyone` and `@here`, below the members as in Discord, where the
+    /// user may use them: in a guild channel that grants `MENTION_EVERYONE`.
+    fn broadcast_suggestions(&self, query: &str) -> Vec<Suggestion> {
+        let allowed = self.view == View::Guild
+            && self
+                .selected_channel_info()
+                .is_some_and(|channel| channel.can_mention_everyone);
+        if !allowed {
+            return Vec::new();
+        }
+        Broadcast::ALL
+            .into_iter()
+            .filter(|broadcast| match_rank(&broadcast.text()[1..], query).is_some())
+            .map(Suggestion::Broadcast)
+            .collect()
     }
 
     /// The open guild's channels matching `query`, in sidebar order. None in

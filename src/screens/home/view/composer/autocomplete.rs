@@ -93,14 +93,15 @@ impl HomeScreen {
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let (glyph, label, detail): (AnyElement, String, Option<String>) = match suggestion {
+        let (glyph, label, detail): (Option<AnyElement>, String, Option<String>) = match suggestion
+        {
             Suggestion::User {
                 name,
                 username,
                 avatar_url,
                 ..
             } => (
-                avatar(name.clone(), avatar_url.clone(), px(24.)).into_any_element(),
+                Some(avatar(name.clone(), avatar_url.clone(), px(24.)).into_any_element()),
                 name.clone(),
                 username.clone(),
             ),
@@ -110,17 +111,25 @@ impl HomeScreen {
                 category,
                 ..
             } => (
-                Icon::default()
-                    .path(channel_icon_path(*kind))
-                    .text_color(theme.muted_foreground)
-                    .into_any_element(),
+                Some(
+                    Icon::default()
+                        .path(channel_icon_path(*kind))
+                        .text_color(theme.muted_foreground)
+                        .into_any_element(),
+                ),
                 name.clone(),
                 category.clone(),
             ),
             Suggestion::Emoji { emoji, guild } => (
-                emoji_glyph(emoji, 22., self, false),
+                Some(emoji_glyph(emoji, 22., self, false)),
                 emoji.label(),
                 guild.clone(),
+            ),
+            // Plain text in Discord, with no picture beside it.
+            Suggestion::Broadcast(broadcast) => (
+                None,
+                broadcast.text().to_string(),
+                Some(broadcast.description().to_string()),
             ),
         };
 
@@ -132,15 +141,15 @@ impl HomeScreen {
             .rounded(theme.radius)
             .cursor_pointer()
             .when(selected, |this| this.bg(theme.sidebar_accent))
-            .child(
+            .children(glyph.map(|glyph| {
                 div()
                     .flex()
                     .size(px(24.))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .child(glyph),
-            )
+                    .child(glyph)
+            }))
             .child(
                 div()
                     .flex_1()
@@ -157,7 +166,8 @@ impl HomeScreen {
                 div()
                     .flex_shrink()
                     .min_w_0()
-                    .max_w(relative(0.4))
+                    // Room for `@everyone`'s description, which is long.
+                    .max_w(relative(0.6))
                     .truncate()
                     .text_xs()
                     .text_color(theme.muted_foreground)

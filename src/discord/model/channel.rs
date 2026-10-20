@@ -46,6 +46,9 @@ pub struct Channel {
     /// Whether the current user holds `USE_EXTERNAL_EMOJIS` here. Nitro is
     /// needed as well before another guild's emoji can be sent.
     pub can_use_external_emoji: bool,
+    /// Whether the current user holds `MENTION_EVERYONE` here, without which
+    /// `@everyone` and `@here` don't notify anyone and aren't offered.
+    pub can_mention_everyone: bool,
     /// The newest message, which decides whether the channel is unread.
     pub last_message_id: Option<Id<MessageMarker>>,
 }
@@ -83,6 +86,7 @@ pub(in crate::discord) fn convert_channel(
     can_send: bool,
     can_manage_messages: bool,
     can_use_external_emoji: bool,
+    can_mention_everyone: bool,
 ) -> Option<Channel> {
     let kind = match channel.kind {
         ChannelType::GuildText => ChannelKind::Text,
@@ -107,6 +111,7 @@ pub(in crate::discord) fn convert_channel(
         can_send,
         can_manage_messages,
         can_use_external_emoji,
+        can_mention_everyone,
         last_message_id: channel.last_message_id.map(Id::cast),
     })
 }

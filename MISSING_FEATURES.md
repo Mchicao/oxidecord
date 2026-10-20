@@ -8,7 +8,7 @@
 | Local time zone for timestamps | Partial | Message times are local; `<t:…>` markup, embed footers and snowflake dates (member since) are still UTC |
 | Global display names in mentions | Partial | twilight's `Mention` model drops `global_name`, so a mention shows the nickname or username |
 | Super reactions (burst) | Missing | |
-| Autocomplete for `@mentions`, `#channels`, `:emoji:` in the composer | Partial | Members, channels and emoji are suggested; roles, `@everyone` and `@here` aren't |
+| Autocomplete for `@mentions`, `#channels`, `:emoji:` in the composer | Partial | Members, channels, emoji, `@everyone` and `@here` are suggested; roles aren't |
 | Slash commands and app commands | Missing | |
 | Message components (buttons, select menus, modals) | Missing | Bot messages only show their embeds |
 | Stickers (sending and rendering) | Missing | |

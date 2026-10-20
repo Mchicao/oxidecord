@@ -53,6 +53,7 @@ pub(in crate::screens::home) enum Suggestion {
         /// The category it's filed under, shown beside it as in Discord.
         category: Option<String>,
     },
+    Broadcast(Broadcast),
     Emoji {
         emoji: PickerEmoji,
         /// The guild a custom emoji is from.
@@ -67,7 +68,34 @@ impl Suggestion {
         match self {
             Self::User { id, .. } => format!("user-{id}"),
             Self::Channel { id, .. } => format!("channel-{id}"),
+            Self::Broadcast(broadcast) => broadcast.text().to_string(),
             Self::Emoji { emoji, .. } => format!("emoji-{:?}", emoji.recent_key()),
+        }
+    }
+}
+
+/// `@everyone` and `@here`. Sent as written: Discord reads them from the text.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::screens::home) enum Broadcast {
+    Everyone,
+    Here,
+}
+
+impl Broadcast {
+    pub const ALL: [Self; 2] = [Self::Everyone, Self::Here];
+
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Everyone => "@everyone",
+            Self::Here => "@here",
+        }
+    }
+
+    /// Discord's wording for what it does.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Everyone => "Notify everyone who has permission to view this channel.",
+            Self::Here => "Notify everyone online who has permission to view this channel.",
         }
     }
 }
