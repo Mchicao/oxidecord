@@ -17,7 +17,7 @@ use gpui_component::{Root, input};
 use crate::screens::app::AppScreen;
 use crate::screens::home::{
     AutocompleteAccept, AutocompleteNext, AutocompletePrevious, COMPOSER_CONTEXT, EDIT_CONTEXT,
-    EditLastMessage, PasteAttachment, SaveEdit, SendMessage,
+    EditLastMessage, MarkConversationRead, PasteAttachment, SaveEdit, SendMessage,
 };
 
 fn main() {
@@ -80,6 +80,9 @@ fn main() {
             KeyBinding::new("up", AutocompletePrevious, Some(&composer_input)),
             KeyBinding::new("down", AutocompleteNext, Some(&composer_input)),
             KeyBinding::new("tab", AutocompleteAccept, Some(&composer_input)),
+            // No context, so anything that binds escape itself — an input, a
+            // dialog, a menu — takes it first.
+            KeyBinding::new("escape", MarkConversationRead, None),
         ]);
 
         let options = WindowOptions {

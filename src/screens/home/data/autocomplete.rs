@@ -130,18 +130,21 @@ impl HomeScreen {
     }
 
     /// Escape puts the suggestions away until the cursor leaves the word.
+    /// With none showing it drops the reply being composed, and after that
+    /// reads the conversation, as Discord's does.
     pub(in crate::screens::home) fn on_autocomplete_escape(
         &mut self,
         _: &Escape,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.autocomplete.take() {
-            Some(autocomplete) => {
-                self.autocomplete_dismissed = Some(autocomplete.range.start);
-                cx.notify();
-            }
-            None => cx.propagate(),
+        if let Some(autocomplete) = self.autocomplete.take() {
+            self.autocomplete_dismissed = Some(autocomplete.range.start);
+            cx.notify();
+        } else if self.replying_to.take().is_some() {
+            cx.notify();
+        } else {
+            self.mark_conversation_read(window, cx);
         }
     }
 

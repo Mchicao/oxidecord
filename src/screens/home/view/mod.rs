@@ -15,7 +15,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex};
 
-use super::{HomeScreen, View};
+use super::{HomeScreen, MarkConversationRead, View};
 use crate::ui::depth;
 
 const MESSAGE_PADDING_X: f32 = 16.;
@@ -35,6 +35,8 @@ impl Render for HomeScreen {
         ] {
             scroll.step(window);
         }
+        // After the glide's step, so it reads where this frame draws the list.
+        self.sync_at_bottom(cx);
 
         // Follows whichever way the selection changed: a channel click, a
         // guild switch, the DM view, a voice join.
@@ -76,6 +78,9 @@ impl Render for HomeScreen {
             .bg(cx.theme().sidebar)
             .on_action(cx.listener(Self::on_paste_attachment))
             .on_action(cx.listener(Self::on_edit_last_message))
+            .on_action(cx.listener(|this, _: &MarkConversationRead, window, cx| {
+                this.mark_conversation_read(window, cx);
+            }))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 if this.shift_held != event.modifiers.shift {
                     cx.notify();

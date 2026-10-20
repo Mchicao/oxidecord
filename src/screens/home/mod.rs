@@ -66,6 +66,10 @@ actions!(
         AutocompleteNext,
         /// Put the highlighted autocomplete suggestion in the composer. Bound
         /// to tab there; enter does it too while suggestions are showing.
-        AutocompleteAccept
+        AutocompleteAccept,
+        /// Read the open conversation through to its newest message and jump
+        /// there. Bound to escape, as in Discord; in the composer the input's
+        /// own escape does it, once there's nothing else for escape to close.
+        MarkConversationRead
     ]
 );

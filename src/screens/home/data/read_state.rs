@@ -1,6 +1,6 @@
 //! Keeping track of what's been read: acking the open conversation as the
-//! user reads it, marking a message unread, and the "new" divider that shows
-//! where they'd read up to.
+//! user reads it, marking a message unread or the whole conversation read,
+//! and the "new" divider that shows where they'd read up to.
 
 use std::time::Duration;
 
@@ -38,6 +38,83 @@ impl HomeScreen {
         };
         self.unreads.note_latest(channel_id, newest);
         self.queue_ack(channel_id, newest, cx);
+    }
+
+    /// Reads where the message list actually sits, and acks the conversation
+    /// on reaching its newest message. Called every frame: the list's scroll
+    /// handler can't do this, since it only fires for the wheel and reports
+    /// where the list was before the event moved it, and smooth scrolling
+    /// glides the rest of the way without it — so the bottom was only noticed
+    /// on the next tick after reaching it.
+    pub(in crate::screens::home) fn sync_at_bottom(&mut self, cx: &mut Context<Self>) {
+        let list = &self.messages_list;
+        // Pinned to the bottom, the list reports its top as past the last
+        // item.
+        let at_bottom = list.logical_scroll_top().item_ix >= list.item_count();
+        if at_bottom == self.at_bottom {
+            return;
+        }
+        self.at_bottom = at_bottom;
+        if at_bottom {
+            self.ack_open_conversation(cx);
+        }
+    }
+
+    /// Reads the open conversation through to its newest message and takes
+    /// the user there, as escape and the "new messages" bar do in Discord. It
+    /// undoes marking it unread too, and the divider goes.
+    pub(in crate::screens::home) fn mark_conversation_read(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_channel.is_none() {
+            return;
+        }
+        self.marked_unread = false;
+        self.set_unread_marker(None);
+        if self.reached_newest {
+            self.messages_list.scroll_to(ListOffset {
+                item_ix: self.messages.len(),
+                offset_in_item: px(0.),
+            });
+            self.at_bottom = true;
+            self.ack_open_conversation(cx);
+        } else {
+            // Acked when the newest page lands, which opens at the bottom.
+            self.jump_to_present(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Brings the first unread message to the top of the view, or the oldest
+    /// loaded one when the divider is further back than the list goes.
+    pub(in crate::screens::home) fn jump_to_first_unread(&mut self, cx: &mut Context<Self>) {
+        let ix = self.unread_divider_index().unwrap_or(0);
+        self.messages_list.scroll_to(ListOffset {
+            item_ix: ix,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+    }
+
+    /// What the "new messages" bar says: how many loaded messages are past
+    /// the ack, and when the first of them was sent. `None` while the open
+    /// conversation has nothing unread, or hasn't loaded.
+    pub(in crate::screens::home) fn unread_summary(&self) -> Option<(usize, bool, String)> {
+        let channel_id = self.selected_channel?;
+        if self.messages_loading || !self.unreads.is_unread(channel_id) {
+            return None;
+        }
+        let acked = self.unreads.acked(channel_id)?;
+        let ix = self.messages.partition_point(|message| message.id <= acked);
+        let first = self.messages.get(ix)?;
+        let count = self.messages[ix..]
+            .iter()
+            .filter(|message| message.delivery == discord::Delivery::Sent)
+            .count();
+        // Opened further back than the present, there are more past the end.
+        Some((count, !self.reached_newest, first.timestamp_label()))
     }
 
     /// Moves a channel's ack forward at once, and sends it after a moment

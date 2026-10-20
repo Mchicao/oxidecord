@@ -17,6 +17,8 @@ use crate::screens::home::view::{GROUP_GAP, MESSAGE_PADDING_X};
 /// doesn't sit flush against the composer.
 const NEWEST_MESSAGE_GAP: f32 = 12.;
 
+const UNREAD_BAR_HEIGHT: f32 = 28.;
+
 /// The red rule Discord draws above the first message the user hasn't read.
 fn new_messages_divider(cx: &App) -> impl IntoElement {
     let theme = cx.theme();
@@ -105,6 +107,7 @@ impl HomeScreen {
             .on_scroll_wheel(
                 cx.listener(|this, event, window, _| this.messages_scroll.absorb(event, window)),
             );
+        let unread_bar = self.render_unread_bar(cx);
         // Floats over the list rather than taking a row of its own: appearing
         // and disappearing in the layout would resize the viewport under a
         // scroll that is still moving, nudging the messages twice per page.
@@ -112,7 +115,12 @@ impl HomeScreen {
             container = container.child(
                 h_flex()
                     .absolute()
-                    .top_0()
+                    // Below the unread bar, which would hide it.
+                    .top(if unread_bar.is_some() {
+                        px(UNREAD_BAR_HEIGHT)
+                    } else {
+                        px(0.)
+                    })
                     .left_0()
                     .w_full()
                     .py_1()
@@ -134,7 +142,56 @@ impl HomeScreen {
         if !self.reached_newest {
             container = container.child(self.render_jump_to_present(cx));
         }
-        container.into_any_element()
+        container.children(unread_bar).into_any_element()
+    }
+
+    /// Discord's bar across the top of a conversation with unread messages:
+    /// clicking it goes to the first of them, and its button reads them all.
+    /// It goes once they're acked, which reaching the bottom does.
+    fn render_unread_bar(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let (count, more, since) = self.unread_summary()?;
+        let theme = cx.theme();
+        let noun = if count == 1 && !more {
+            "message"
+        } else {
+            "messages"
+        };
+        let more = if more { "+" } else { "" };
+        Some(
+            h_flex()
+                .id("unread-bar")
+                .occlude()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .mx_2()
+                .h(px(UNREAD_BAR_HEIGHT))
+                .px_3()
+                .items_center()
+                .justify_between()
+                .rounded_b(radius::CARD)
+                .bg(theme.primary)
+                .text_color(theme.primary_foreground)
+                .text_sm()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.jump_to_first_unread(cx)))
+                .child(format!("{count}{more} new {noun} since {since}"))
+                .child(
+                    div()
+                        .id("mark-as-read")
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .hover(|style| style.underline())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // The bar's own click would scroll back up to the
+                            // unread.
+                            cx.stop_propagation();
+                            this.mark_conversation_read(window, cx);
+                        }))
+                        .child("Mark As Read"),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_jump_to_present(&self, cx: &Context<Self>) -> impl IntoElement {

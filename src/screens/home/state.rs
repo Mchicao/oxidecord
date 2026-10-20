@@ -512,12 +512,10 @@ impl HomeScreen {
         let messages_list = ListState::new(0, ListAlignment::Bottom, px(512.));
         let weak = cx.entity().downgrade();
         messages_list.set_scroll_handler(move |event, _window, cx| {
+            // Whether the newest message is in view is read off the list each
+            // frame instead (`sync_at_bottom`): the range here is from before
+            // this event moved it.
             let _ = weak.update(cx, |this, cx| {
-                this.at_bottom = event.visible_range.end >= event.count;
-                // Reaching the newest message is reading it.
-                if this.at_bottom {
-                    this.ack_open_conversation(cx);
-                }
                 // Far enough ahead that a page usually lands before the scroll
                 // reaches the top, so a continuous scroll up never stalls
                 // against it.
