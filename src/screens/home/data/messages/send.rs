@@ -8,6 +8,7 @@ use gpui::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
+use crate::screens::home::autocomplete::resolve_mentions;
 use crate::screens::home::{HomeScreen, View};
 
 /// Discord's epoch, 2015-01-01, in Unix milliseconds.
@@ -47,7 +48,11 @@ impl HomeScreen {
             return;
         }
 
-        let content = self.resolve_emoji_names(self.message_input.read(cx).value().trim());
+        let content = resolve_mentions(
+            self.message_input.read(cx).value().trim(),
+            &self.composer_mentions,
+        );
+        let content = self.resolve_emoji_names(&content);
         if content.is_empty() && self.pending_attachments.is_empty() {
             return;
         }
@@ -73,6 +78,7 @@ impl HomeScreen {
         self.message_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
         });
+        self.composer_mentions.clear();
         self.send_error = None;
         self.replying_to = None;
         // Speaking up reads the conversation, as in Discord: the divider goes

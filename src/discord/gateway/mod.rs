@@ -24,7 +24,7 @@ use twilight_model::id::{
 use crate::platform::runtime;
 
 use super::model::{
-    ChannelLatest, GuildEmoji, GuildUnreads, MemberListUpdate, Message, MuteSettings,
+    ChannelLatest, GuildEmoji, GuildMember, GuildUnreads, MemberListUpdate, Message, MuteSettings,
     PresenceStatus, ReactionEmoji, ReadState, Role, StreamServerInfo, VoiceServerInfo,
     VoiceUserState,
 };
@@ -141,6 +141,13 @@ pub enum GatewayEvent {
         guild_id: Id<GuildMarker>,
         user_id: Id<UserMarker>,
         roles: Vec<Id<RoleMarker>>,
+    },
+    /// Members named by a `GUILD_MEMBERS_CHUNK`: the answer to a search from
+    /// [`GatewaySender::search_members`], or to a request for messages'
+    /// authors.
+    Members {
+        guild_id: Id<GuildMarker>,
+        members: Vec<GuildMember>,
     },
     /// A change to a channel member list the session is subscribed to; see
     /// [`GatewaySender::subscribe_member_list`].

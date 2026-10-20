@@ -1,8 +1,9 @@
 //! The message composer: the reply banner, the staged-attachment tray, and the
 //! text input, wrapped in one rounded surface, with the typing indicator
-//! floating above it.
+//! floating above it, and the autocomplete's suggestions over that.
 
 mod attachments;
+mod autocomplete;
 mod emoji_picker;
 mod reply_banner;
 mod typing_indicator;
@@ -63,6 +64,7 @@ impl HomeScreen {
             .pb_2()
             .gap_1()
             .children(self.render_typing_indicator(cx))
+            .children(self.render_autocomplete(cx))
             .when_some(self.send_error.clone(), |this, error| {
                 this.child(div().text_xs().text_color(theme.danger).child(error))
             })
@@ -102,16 +104,30 @@ impl HomeScreen {
                                     ),
                             )
                             .child(
-                                // Gives enter its send binding and the up arrow
-                                // its edit-last-message one while the composer
-                                // is focused.
+                                // Gives enter its send binding, and the arrows
+                                // and tab theirs, while the composer is
+                                // focused.
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .key_context(COMPOSER_CONTEXT)
                                     .on_action(cx.listener(|this, _: &SendMessage, window, cx| {
-                                        this.send_current_message(window, cx);
+                                        // Enter takes a suggestion, as in
+                                        // Discord, rather than sending the
+                                        // half-typed word.
+                                        match this.autocomplete.as_ref() {
+                                            Some(autocomplete) => this.accept_suggestion(
+                                                autocomplete.selected,
+                                                window,
+                                                cx,
+                                            ),
+                                            None => this.send_current_message(window, cx),
+                                        }
                                     }))
+                                    .on_action(cx.listener(Self::on_autocomplete_previous))
+                                    .on_action(cx.listener(Self::on_autocomplete_next))
+                                    .on_action(cx.listener(Self::on_autocomplete_accept))
+                                    .on_action(cx.listener(Self::on_autocomplete_escape))
                                     .child(
                                         Input::new(&self.message_input)
                                             .appearance(false)

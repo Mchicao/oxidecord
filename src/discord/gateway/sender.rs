@@ -126,6 +126,23 @@ impl GatewaySender {
         }
     }
 
+    /// Sends `REQUEST_GUILD_MEMBERS` (opcode 8) for up to `limit` members
+    /// whose username or nickname starts with `query`, for the composer's
+    /// mention suggestions. They come back as `GUILD_MEMBERS_CHUNK`s, like
+    /// [`Self::request_members`]'s.
+    pub fn search_members(&self, guild_id: Id<GuildMarker>, query: &str, limit: u8) {
+        let payload = serde_json::json!({
+            "op": 8,
+            "d": {
+                "guild_id": [guild_id],
+                "query": query,
+                "limit": limit,
+                "presences": false,
+            }
+        });
+        let _ = self.inner.send(payload.to_string());
+    }
+
     /// Sends `GUILD_SUBSCRIPTIONS_BULK` (opcode 37): subscribes to the
     /// member list of `channel_id`, in the index ranges given (inclusive,
     /// a hundred apiece, as Discord's client asks). Replaces the guild's

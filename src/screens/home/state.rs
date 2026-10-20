@@ -5,6 +5,7 @@
 //! while nothing outside the home screen can.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,6 +23,7 @@ use crate::platform::prefs;
 use crate::platform::video::VideoPlayer;
 use crate::ui::smooth_scroll::SmoothScroll;
 
+use super::autocomplete::{Suggestion, Trigger};
 use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
 use super::emoji::PickerRow;
@@ -148,6 +150,18 @@ pub(super) struct EmojiPicker {
     pub hovered: Option<super::emoji::PickerEmoji>,
     pub scroll: UniformListScrollHandle,
     pub _search_changed: Subscription,
+}
+
+/// The suggestions offered above the composer for the `@`, `#` or `:` word
+/// being typed at the cursor.
+pub(super) struct Autocomplete {
+    pub trigger: Trigger,
+    /// The word's byte range in the composer's text, trigger included: what
+    /// accepting a suggestion replaces.
+    pub range: Range<usize>,
+    pub query: String,
+    pub items: Vec<Suggestion>,
+    pub selected: usize,
 }
 
 /// The open guild channel's member list, as far as Discord has synced it.
@@ -427,6 +441,20 @@ pub struct HomeScreen {
     /// The conversation the typing indicator was last sent to, and when.
     pub(super) typing_sent: Option<(Id<ChannelMarker>, Instant)>,
     pub(super) typists: HashMap<Id<ChannelMarker>, Vec<Typist>>,
+    pub(super) autocomplete: Option<Autocomplete>,
+    /// Where the word the user dismissed suggestions for with escape starts,
+    /// so typing on in it doesn't bring them straight back.
+    pub(super) autocomplete_dismissed: Option<usize>,
+    /// Mentions put in the composer by the autocomplete, as the text shown
+    /// there and the markup it's sent as.
+    pub(super) composer_mentions: Vec<(String, String)>,
+    /// Guild members the gateway has named, by guild: from mention searches
+    /// and from the requests for messages' authors.
+    pub(super) guild_members:
+        HashMap<Id<GuildMarker>, HashMap<Id<UserMarker>, discord::GuildMember>>,
+    /// Member searches already sent this session, by guild and lowercased
+    /// query, so retyping a name doesn't ask again.
+    pub(super) member_searches: HashSet<(Id<GuildMarker>, String)>,
     pub(super) _composer_changed: Subscription,
     pub(super) messages_list: ListState,
     pub(super) video: Option<VideoPlayback>,
@@ -456,6 +484,7 @@ impl HomeScreen {
         let composer_changed = cx.subscribe(&message_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.on_composer_changed(cx);
+                this.refresh_autocomplete(cx);
             }
         });
 
@@ -561,6 +590,11 @@ impl HomeScreen {
             message_input,
             typing_sent: None,
             typists: HashMap::new(),
+            autocomplete: None,
+            autocomplete_dismissed: None,
+            composer_mentions: Vec::new(),
+            guild_members: HashMap::new(),
+            member_searches: HashSet::new(),
             _composer_changed: composer_changed,
             messages_scroll: SmoothScroll::list(messages_list.clone()),
             messages_list,

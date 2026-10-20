@@ -499,3 +499,29 @@ fn member_list_update_reads_groups_members_and_edits() {
     assert_eq!(three.status, PresenceStatus::Invisible);
     assert_eq!(updated.activity.as_deref(), Some("Listening to Spotify"));
 }
+
+#[test]
+fn members_chunk_names_the_members_it_carries() {
+    let events = dispatch_json(
+        "GUILD_MEMBERS_CHUNK",
+        r#"{
+            "guild_id": "10",
+            "members": [
+                {"user": {"id": "2", "username": "two", "global_name": "Two"}, "nick": "", "roles": []},
+                {"user": {"id": "3", "username": "three"}, "nick": "Trey", "roles": []}
+            ],
+            "chunk_index": 0,
+            "chunk_count": 1
+        }"#,
+    );
+    let Some(GatewayEvent::Members { guild_id, members }) = events.last() else {
+        panic!("GUILD_MEMBERS_CHUNK should end with the members it names");
+    };
+    assert_eq!(*guild_id, Id::new(10));
+    let names: Vec<_> = members
+        .iter()
+        .map(|member| (member.name.as_str(), member.username.as_deref()))
+        .collect();
+    // A cleared nickname falls back to the global name.
+    assert_eq!(names, [("Two", Some("two")), ("Trey", Some("three"))]);
+}

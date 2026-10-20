@@ -129,11 +129,25 @@ impl HomeScreen {
     }
 
     fn insert_emoji(&mut self, emoji: &PickerEmoji, window: &mut Window, cx: &mut Context<Self>) {
-        let text = match emoji {
+        let Some(text) = self.composer_emoji_text(emoji) else {
+            return;
+        };
+        self.message_input.update(cx, |input, cx| {
+            input.insert(text, window, cx);
+        });
+    }
+
+    /// What putting `emoji` in the composer writes there. `None` for one that's
+    /// locked.
+    pub(in crate::screens::home) fn composer_emoji_text(
+        &self,
+        emoji: &PickerEmoji,
+    ) -> Option<String> {
+        Some(match emoji {
             PickerEmoji::Unicode(emoji) => emoji.as_str().to_string(),
             PickerEmoji::Custom {
                 locked: Some(_), ..
-            } => return,
+            } => return None,
             // The readable `:name:` when sending will turn it back into this
             // emoji; markup when another one of the same name would win.
             PickerEmoji::Custom { emoji, .. } => {
@@ -143,10 +157,7 @@ impl HomeScreen {
                     _ => emoji.markdown(),
                 }
             }
-        };
-        self.message_input.update(cx, |input, cx| {
-            input.insert(text, window, cx);
-        });
+        })
     }
 
     pub(in crate::screens::home) fn hover_emoji(
@@ -187,7 +198,9 @@ impl HomeScreen {
         })
     }
 
-    fn usable_custom_emoji(&self) -> impl Iterator<Item = &GuildEmoji> {
+    pub(in crate::screens::home) fn usable_custom_emoji(
+        &self,
+    ) -> impl Iterator<Item = &GuildEmoji> {
         self.emoji_by_guild().flat_map(move |(guild_id, emojis)| {
             emojis
                 .iter()
@@ -282,7 +295,7 @@ impl HomeScreen {
 
 /// Moves `emoji` to the front of the recently used. The open picker keeps the
 /// list it was opened with; the next one shows the change.
-fn remember_emoji(emoji: RecentEmoji) {
+pub(super) fn remember_emoji(emoji: RecentEmoji) {
     prefs::update(|prefs| {
         let recent = &mut prefs.recent_emojis;
         recent.retain(|other| *other != emoji);

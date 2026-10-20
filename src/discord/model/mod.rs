@@ -21,7 +21,7 @@ mod voice;
 pub use channel::{Channel, ChannelKind, DirectMessage};
 pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedLayout, EmbedMedia};
 pub use emoji::GuildEmoji;
-pub use guild::{Guild, Role};
+pub use guild::{Guild, GuildMember, Role};
 pub use markdown::{Block, Inline, List, Markdown, Mention};
 pub use member_list::{
     ListMember, MemberGroupKind, MemberListGroup, MemberListItem, MemberListOp, MemberListUpdate,

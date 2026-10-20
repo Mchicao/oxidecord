@@ -14,9 +14,9 @@ pub use gateway::{GatewayEvent, GatewaySender, IncomingMessage, ReactionChange, 
 pub use model::{
     Block, Channel, ChannelKind, ChannelLatest, CurrentUser, Delivery, DirectMessage, Embed,
     EmbedAuthor, EmbedField, EmbedFooter, EmbedLayout, EmbedMedia, ForwardedMessage, Guild,
-    GuildEmoji, GuildFolders, GuildUnreads, ImageAttachment, Inline, List, ListMember, Markdown,
-    MemberGroupKind, MemberListGroup, MemberListItem, MemberListOp, MemberListUpdate, Mention,
-    MentionedUser, Message, MessageReference, MuteSettings, PresenceStatus, Reaction,
+    GuildEmoji, GuildFolders, GuildMember, GuildUnreads, ImageAttachment, Inline, List, ListMember,
+    Markdown, MemberGroupKind, MemberListGroup, MemberListItem, MemberListOp, MemberListUpdate,
+    Mention, MentionedUser, Message, MessageReference, MuteSettings, PresenceStatus, Reaction,
     ReactionEmoji, Reactor, ReadState, Role, SPOILER_PREFIX, SpoilerCover, StreamServerInfo,
     UnreadChannel, UserProfile, VideoAttachment, VoiceServerInfo, VoiceUserState, stream_key,
 };

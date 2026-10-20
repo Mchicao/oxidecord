@@ -16,7 +16,8 @@ use gpui_component::{Root, input};
 
 use crate::screens::app::AppScreen;
 use crate::screens::home::{
-    COMPOSER_CONTEXT, EDIT_CONTEXT, EditLastMessage, PasteAttachment, SaveEdit, SendMessage,
+    AutocompleteAccept, AutocompleteNext, AutocompletePrevious, COMPOSER_CONTEXT, EDIT_CONTEXT,
+    EditLastMessage, PasteAttachment, SaveEdit, SendMessage,
 };
 
 fn main() {
@@ -68,6 +69,11 @@ fn main() {
                 Some(&edit_input),
             ),
             KeyBinding::new("up", EditLastMessage, Some(&composer_input)),
+            // After the up arrow's edit binding, so suggestions get it first
+            // and hand it on when there are none.
+            KeyBinding::new("up", AutocompletePrevious, Some(&composer_input)),
+            KeyBinding::new("down", AutocompleteNext, Some(&composer_input)),
+            KeyBinding::new("tab", AutocompleteAccept, Some(&composer_input)),
         ]);
 
         let options = WindowOptions {

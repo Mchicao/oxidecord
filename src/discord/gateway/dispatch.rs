@@ -292,7 +292,20 @@ pub(super) fn dispatch(
             .map(|update| member_roles(update.guild_id, vec![update.member]).collect())
             .unwrap_or_default(),
         "GUILD_MEMBERS_CHUNK" => serde_json::from_str::<MembersChunkPayload>(data)
-            .map(|chunk| member_roles(chunk.guild_id, chunk.members).collect())
+            .map(|chunk| {
+                let members: Vec<_> = chunk
+                    .members
+                    .iter()
+                    .filter_map(RawMember::guild_member)
+                    .collect();
+                let named = (!members.is_empty()).then_some(GatewayEvent::Members {
+                    guild_id: chunk.guild_id,
+                    members,
+                });
+                member_roles(chunk.guild_id, chunk.members)
+                    .chain(named)
+                    .collect()
+            })
             .unwrap_or_default(),
         "GUILD_MEMBER_LIST_UPDATE" => serde_json::from_str::<RawMemberListUpdate>(data)
             .map(|update| vec![GatewayEvent::MemberList(convert_member_list_update(update))])

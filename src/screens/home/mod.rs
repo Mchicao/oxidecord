@@ -7,6 +7,7 @@
 //! - [`data`] — everything that talks to [`crate::discord`] and mutates state.
 //! - [`view`] — everything that renders that state.
 
+mod autocomplete;
 mod channels;
 mod data;
 mod emoji;
@@ -34,7 +35,10 @@ pub const EDIT_CONTEXT: &str = "MessageEdit";
 /// the up arrow to editing the last message.
 pub const COMPOSER_CONTEXT: &str = "MessageComposer";
 
-use state::{EditingMessage, EmojiPicker, EmojiTarget, PinsPopup, ProfilePopup, ReplyTarget, View};
+use state::{
+    Autocomplete, EditingMessage, EmojiPicker, EmojiTarget, PinsPopup, ProfilePopup, ReplyTarget,
+    View,
+};
 
 actions!(
     oxidecord,
@@ -51,6 +55,16 @@ actions!(
         SaveEdit,
         /// Open the user's most recent message in the conversation for
         /// editing. Bound to the up arrow in an empty composer, like Discord.
-        EditLastMessage
+        EditLastMessage,
+        /// Highlight the previous autocomplete suggestion. Bound to the up
+        /// arrow in the composer, where it moves the cursor when there are
+        /// none.
+        AutocompletePrevious,
+        /// Highlight the next autocomplete suggestion. Bound to the down
+        /// arrow in the composer.
+        AutocompleteNext,
+        /// Put the highlighted autocomplete suggestion in the composer. Bound
+        /// to tab there; enter does it too while suggestions are showing.
+        AutocompleteAccept
     ]
 );

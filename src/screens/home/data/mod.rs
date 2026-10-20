@@ -6,6 +6,7 @@
 //! `Send`-safe channel that a gpui foreground task drains.
 
 pub(super) mod attachments;
+pub(super) mod autocomplete;
 pub(super) mod dms;
 pub(super) mod emoji;
 pub(super) mod guilds;

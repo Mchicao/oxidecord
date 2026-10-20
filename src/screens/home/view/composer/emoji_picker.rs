@@ -208,7 +208,12 @@ impl HomeScreen {
 
 /// The emoji itself at `size`: a glyph for unicode, the CDN image for custom.
 /// A locked one is drawn greyed out.
-fn emoji_glyph(emoji: &PickerEmoji, size: f32, screen: &HomeScreen, locked: bool) -> AnyElement {
+pub(super) fn emoji_glyph(
+    emoji: &PickerEmoji,
+    size: f32,
+    screen: &HomeScreen,
+    locked: bool,
+) -> AnyElement {
     match emoji {
         PickerEmoji::Unicode(emoji) => div()
             .text_size(px(size * 0.85))

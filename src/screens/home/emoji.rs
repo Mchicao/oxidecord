@@ -75,6 +75,13 @@ static UNICODE: LazyLock<Vec<(&'static str, Vec<&'static emojis::Emoji>)>> = Laz
         .collect()
 });
 
+/// Every unicode emoji the system font can draw, in picker order.
+pub(in crate::screens::home) fn unicode_emojis() -> impl Iterator<Item = &'static emojis::Emoji> {
+    UNICODE
+        .iter()
+        .flat_map(|(_, emojis)| emojis.iter().copied())
+}
+
 fn group_title(group: emojis::Group) -> &'static str {
     use emojis::Group;
     match group {

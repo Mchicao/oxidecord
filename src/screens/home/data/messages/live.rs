@@ -247,6 +247,9 @@ impl HomeScreen {
             discord::GatewayEvent::MemberList(update) => {
                 self.apply_member_list_update(update, cx);
             }
+            discord::GatewayEvent::Members { guild_id, members } => {
+                self.add_guild_members(guild_id, members, cx);
+            }
             discord::GatewayEvent::MemberRoles {
                 guild_id,
                 user_id,

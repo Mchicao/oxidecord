@@ -122,6 +122,28 @@ impl RawMember {
     pub(in crate::discord) fn is_bot(&self) -> bool {
         self.user.as_ref().is_some_and(|user| user.bot)
     }
+
+    /// Who they are, for a member that came with its user object and a name.
+    pub(in crate::discord) fn guild_member(&self) -> Option<GuildMember> {
+        let user = self.user.as_ref()?;
+        Some(GuildMember {
+            user_id: user.id,
+            name: self.display_name()?,
+            username: user.username.clone().filter(|name| !name.is_empty()),
+            avatar_url: self.avatar_url(),
+        })
+    }
+}
+
+/// A guild member as a member chunk names them, for the composer's mention
+/// suggestions.
+#[derive(Clone)]
+pub struct GuildMember {
+    pub user_id: Id<UserMarker>,
+    /// The name the guild shows them by.
+    pub name: String,
+    pub username: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 pub(in crate::discord) fn convert_role(role: RawRole) -> Role {
