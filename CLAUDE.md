@@ -13,6 +13,14 @@ that talks to Discord — payload shapes, opcodes, dispatch fields, close codes 
 guessing. Gateway events are under `topics/gateway-events`, voice and stream connections
 under `topics/voice-connections`.
 
+## Searching the codebase
+
+If CodeGraph is available (a `.codegraph/` index at the repo root), use it before grep or
+reading files to find or understand code. The `codegraph_explore` MCP tool, or
+`codegraph explore "<symbols or question>"` from the shell, returns the relevant symbols'
+source along with their callers and call paths. Fall back to grep and reading files for what it
+doesn't index (configs, docs, themes) or when it isn't set up.
+
 ## Commands
 
 ```bash
