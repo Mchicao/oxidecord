@@ -4,7 +4,7 @@
 use gpui::*;
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, MessageMarker, UserMarker},
 };
 
 use crate::discord;
@@ -119,6 +119,11 @@ impl HomeScreen {
         cx: &mut Context<Self>,
     ) {
         if self.selected_channel != Some(channel_id) || self.messages_loading {
+            // A conversation that was opened before keeps its reactions
+            // current for when it's opened again.
+            if let Some(message) = self.history_cache.message_mut(channel_id, message_id) {
+                apply_reaction(&mut message.reactions, change, self.self_user_id);
+            }
             return;
         }
         let Some(ix) = self
@@ -128,32 +133,39 @@ impl HomeScreen {
         else {
             return;
         };
-        let reactions = &mut self.messages[ix].reactions;
-        let changed = match change {
-            discord::ReactionChange::Add { user_id, emoji } => {
-                let own = Some(user_id) == self.self_user_id;
-                tally_reaction(reactions, &emoji, true, own);
-                Some(emoji)
-            }
-            discord::ReactionChange::Remove { user_id, emoji } => {
-                let own = Some(user_id) == self.self_user_id;
-                tally_reaction(reactions, &emoji, false, own);
-                Some(emoji)
-            }
-            discord::ReactionChange::RemoveEmoji(emoji) => {
-                reactions.retain(|reaction| reaction.emoji != emoji);
-                Some(emoji)
-            }
-            discord::ReactionChange::RemoveAll => {
-                reactions.clear();
-                None
-            }
-        };
+        let changed = apply_reaction(&mut self.messages[ix].reactions, change, self.self_user_id);
         self.forget_reactors(message_id, changed.as_ref());
         // The pills can gain or lose a row, and the list only remeasures rows
         // it draws, so an off-screen message would keep its old height.
         self.messages_list.splice(ix..ix + 1, 1);
         cx.notify();
+    }
+}
+
+/// Applies a reaction dispatch to a message's reactions, returning the emoji
+/// whose reactors changed — `None` when they all did.
+fn apply_reaction(
+    reactions: &mut Vec<discord::Reaction>,
+    change: discord::ReactionChange,
+    self_id: Option<Id<UserMarker>>,
+) -> Option<discord::ReactionEmoji> {
+    match change {
+        discord::ReactionChange::Add { user_id, emoji } => {
+            tally_reaction(reactions, &emoji, true, Some(user_id) == self_id);
+            Some(emoji)
+        }
+        discord::ReactionChange::Remove { user_id, emoji } => {
+            tally_reaction(reactions, &emoji, false, Some(user_id) == self_id);
+            Some(emoji)
+        }
+        discord::ReactionChange::RemoveEmoji(emoji) => {
+            reactions.retain(|reaction| reaction.emoji != emoji);
+            Some(emoji)
+        }
+        discord::ReactionChange::RemoveAll => {
+            reactions.clear();
+            None
+        }
     }
 }
 

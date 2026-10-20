@@ -42,7 +42,7 @@ pub(super) use member_list::{RawMemberListUpdate, convert_member_list_update};
 pub(super) use message::{RawPins, convert_message, convert_reaction_emoji};
 pub(super) use read_state::{
     RawChannelUnread, RawGuildChannel, RawGuildSettings, RawReadState, convert_channel_unreads,
-    convert_guild_unreads, convert_mute_settings, convert_read_states, versioned_list,
+    convert_guild_channels, convert_mute_settings, convert_read_states, versioned_list,
 };
 pub(super) use settings::{RawSettingsProto, encode_status_settings, parse_user_settings};
 pub(super) use user::{RawProfile, convert_current_user, convert_reactor, convert_user_profile};

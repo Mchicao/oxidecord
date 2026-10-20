@@ -257,6 +257,27 @@ fn ready_carries_read_states_and_the_channels_the_user_can_see() {
     };
     assert_eq!(guild.channels.len(), 1);
     assert!(guild.joined.is_some());
+    // And the sidebar's list comes with it, so opening the guild needs no
+    // request.
+    assert!(events.iter().any(|event| matches!(
+        event,
+        GatewayEvent::GuildChannels { guild_id, channels }
+            if *guild_id == Id::new(10) && channels.len() == 1
+    )));
+}
+
+#[test]
+fn channel_changes_mark_their_guild_stale() {
+    let events = dispatch_json(
+        "CHANNEL_UPDATE",
+        r#"{"id": "100", "type": 0, "guild_id": "10", "name": "general"}"#,
+    );
+    assert!(matches!(
+        events.as_slice(),
+        [GatewayEvent::GuildChannelsChanged { guild_id }] if *guild_id == Id::new(10)
+    ));
+    // A DM's has no guild to mark.
+    assert!(dispatch_json("CHANNEL_CREATE", r#"{"id": "200", "type": 1}"#).is_empty());
 }
 
 #[test]

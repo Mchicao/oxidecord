@@ -24,9 +24,9 @@ use twilight_model::id::{
 use crate::platform::runtime;
 
 use super::model::{
-    ChannelLatest, GuildEmoji, GuildMember, GuildUnreads, MemberListUpdate, Message, MuteSettings,
-    PresenceStatus, ReactionEmoji, ReadState, Role, StreamServerInfo, VoiceServerInfo,
-    VoiceUserState,
+    Channel, ChannelLatest, GuildEmoji, GuildMember, GuildUnreads, MemberListUpdate, Message,
+    MuteSettings, PresenceStatus, ReactionEmoji, ReadState, Role, StreamServerInfo,
+    VoiceServerInfo, VoiceUserState,
 };
 
 pub use sender::GatewaySender;
@@ -170,6 +170,18 @@ pub enum GatewayEvent {
     /// A guild's channels that count toward its unread mark, from `READY` or
     /// `GUILD_CREATE`. Replaces what was known of the guild.
     GuildUnreads(GuildUnreads),
+    /// Every channel the user can see in a guild, from `READY` or
+    /// `GUILD_CREATE`: the sidebar's whole list, so opening the guild needs
+    /// no request. Replaces what was known of the guild.
+    GuildChannels {
+        guild_id: Id<GuildMarker>,
+        channels: Vec<Channel>,
+    },
+    /// A channel in a guild was created, changed, or deleted, so the list
+    /// `GuildChannels` gave is out of date.
+    GuildChannelsChanged {
+        guild_id: Id<GuildMarker>,
+    },
     /// Channels' newest messages: the DMs' from `READY`, and channels that
     /// moved in guilds the session isn't sent every message for.
     LatestMessages(Vec<ChannelLatest>),

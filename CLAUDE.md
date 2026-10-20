@@ -45,6 +45,10 @@ older than the installed Visual Studio, build through Ninja: `CMAKE_GENERATOR=Ni
   `view/markdown/` draws parsed markdown. Its `RichText` element exists because gpui text
   can't change font family per run or hold images, so custom emoji are painted into
   placeholder gaps once the text has wrapped.
+  Navigation is served from memory, as Discord's client does: every guild's channel list
+  comes with the gateway's `READY` (REST only fills in until then, or refreshes a list a
+  `CHANNEL_*`/role change made stale), and `history_cache.rs` keeps recently opened
+  conversations, drawn at once and merged with the newest page when it lands.
 - `src/platform/` — runtime, http client, prefs, updater, `video/` (inline video
   playback, decoded by the OS), `capture/` (screen capture and H.264 encoding for
   Go Live, also by the OS), and `h264/` (decoding a watched stream, also by the OS).

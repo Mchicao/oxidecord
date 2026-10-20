@@ -16,7 +16,11 @@ impl HomeScreen {
     /// The call engine is started here too: a call is opened with a gateway
     /// command and answered with gateway dispatches, so neither half is of any
     /// use without the other.
-    pub(in crate::screens::home) fn start_gateway(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::screens::home) fn start_gateway(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(token) = discord::load_token() else {
             return;
         };
@@ -29,13 +33,17 @@ impl HomeScreen {
         });
         self.gateway = Some(gateway);
 
-        cx.spawn(async move |this, cx| {
+        // In the window, since a channel list arriving for the open guild
+        // opens one of its channels.
+        cx.spawn_in(window, async move |this, cx| {
             use futures::StreamExt as _;
 
             let mut rx = rx;
             while let Some(event) = rx.next().await {
                 if this
-                    .update(cx, |this, cx| this.handle_gateway_event(event, cx))
+                    .update_in(cx, |this, window, cx| {
+                        this.handle_gateway_event(event, window, cx)
+                    })
                     .is_err()
                 {
                     // The entity is gone; stop draining so the sender closes.
@@ -85,7 +93,12 @@ impl HomeScreen {
         .detach();
     }
 
-    fn handle_gateway_event(&mut self, event: discord::GatewayEvent, cx: &mut Context<Self>) {
+    fn handle_gateway_event(
+        &mut self,
+        event: discord::GatewayEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match event {
             discord::GatewayEvent::Ready {
                 user_id,
@@ -110,6 +123,11 @@ impl HomeScreen {
                 self.requested_members.clear();
                 // Subscriptions don't outlive the session.
                 self.resubscribe_member_list();
+                // Every guild's channels follow, but any the session sends
+                // as unavailable won't be among them, and channel changes
+                // made while disconnected were never heard of.
+                self.stale_guild_channels
+                    .extend(self.guild_channels.keys().copied());
                 cx.notify();
             }
             discord::GatewayEvent::Presences(presences) => {
@@ -140,15 +158,22 @@ impl HomeScreen {
                     self.note_dm_activity(incoming.channel_id, incoming.message.id, cx);
                 }
                 self.stop_typing(incoming.channel_id, incoming.message.author_id, cx);
+                self.history_cache
+                    .push(incoming.channel_id, incoming.message.clone());
                 self.handle_incoming_message(incoming, cx)
             }
             discord::GatewayEvent::MessageUpdate(incoming) => {
+                self.history_cache
+                    .edit(incoming.channel_id, incoming.message.clone());
                 self.handle_message_update(incoming, cx)
             }
             discord::GatewayEvent::MessageDelete {
                 channel_id,
                 message_ids,
-            } => self.handle_message_delete(channel_id, &message_ids, cx),
+            } => {
+                self.history_cache.delete(channel_id, &message_ids);
+                self.handle_message_delete(channel_id, &message_ids, cx)
+            }
             discord::GatewayEvent::Typing {
                 channel_id,
                 user_id,
@@ -193,6 +218,8 @@ impl HomeScreen {
                 cx.notify();
             }
             discord::GatewayEvent::RoleUpdate { guild_id, role } => {
+                // A role's permissions decide which channels its members see.
+                self.invalidate_guild_channels(guild_id, window, cx);
                 self.guild_roles
                     .entry(guild_id)
                     .or_default()
@@ -200,6 +227,7 @@ impl HomeScreen {
                 cx.notify();
             }
             discord::GatewayEvent::RoleDelete { guild_id, role_id } => {
+                self.invalidate_guild_channels(guild_id, window, cx);
                 if let Some(roles) = self.guild_roles.get_mut(&guild_id) {
                     roles.remove(&role_id);
                 }
@@ -236,6 +264,12 @@ impl HomeScreen {
                 self.unreads.set_guild(guild);
                 cx.notify();
             }
+            discord::GatewayEvent::GuildChannels { guild_id, channels } => {
+                self.set_guild_channels(guild_id, channels, window, cx);
+            }
+            discord::GatewayEvent::GuildChannelsChanged { guild_id } => {
+                self.invalidate_guild_channels(guild_id, window, cx);
+            }
             discord::GatewayEvent::LatestMessages(channels) => {
                 self.unreads.set_latest(channels);
                 cx.notify();
@@ -255,10 +289,18 @@ impl HomeScreen {
                 user_id,
                 roles,
             } => {
-                self.member_roles
+                let previous = self
+                    .member_roles
                     .entry(guild_id)
                     .or_default()
-                    .insert(user_id, roles);
+                    .insert(user_id, roles.clone());
+                // The user's own roles decide which channels they see. Every
+                // message they send carries them too, unchanged.
+                if Some(user_id) == self.self_user_id
+                    && previous.is_some_and(|previous| previous != roles)
+                {
+                    self.invalidate_guild_channels(guild_id, window, cx);
+                }
                 cx.notify();
             }
         }

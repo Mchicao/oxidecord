@@ -118,13 +118,11 @@ impl HomeScreen {
         }
         self.save_collapsed_categories();
         self.view = View::Guild;
-        // Returning from the DM view to the guild that's already loaded: switch
-        // back to its channels without refetching them, reopening a channel
-        // since the DM view cleared the previous selection.
+        // Returning from the DM view to the guild that's already loaded:
+        // switch back to its channels, reopening the channel that was open
+        // since the DM view cleared the selection.
         if same_guild && !self.channel_groups.is_empty() {
-            if let Some(first) = self.first_text_channel() {
-                self.select_channel(first, window, cx);
-            }
+            self.open_guild_channel(window, cx);
             cx.notify();
             return;
         }
@@ -133,9 +131,38 @@ impl HomeScreen {
         self.selected_channel = None;
         self.load_collapsed_categories();
         self.channels_error = None;
-        self.channels_loading = true;
-        cx.notify();
+        self.channels_loading = false;
 
+        match self.guild_channels.get(&guild_id).cloned() {
+            Some(channels) => {
+                self.channel_groups = build_channel_groups(channels);
+                self.open_guild_channel(window, cx);
+                if self.stale_guild_channels.contains(&guild_id) {
+                    self.fetch_guild_channels(guild_id, window, cx);
+                }
+            }
+            // Only until the gateway's `READY` lands, or for a guild it sent
+            // as unavailable.
+            None => {
+                self.channels_loading = true;
+                self.fetch_guild_channels(guild_id, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Fetches a guild's channels over REST: when the gateway hasn't sent
+    /// them yet, or the list it sent has since changed. A fetch for the open
+    /// guild that has a list on screen already swaps the new one in under it.
+    fn fetch_guild_channels(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.fetching_guild_channels.insert(guild_id) {
+            return;
+        }
         // The guild list already carries the user's guild-wide permissions, so
         // channel visibility only needs the member object on top of them.
         let (base_permissions, owner) = self
@@ -148,11 +175,7 @@ impl HomeScreen {
         cx.spawn_in(window, async move |this, cx| {
             let result = discord::fetch_channels(guild_id, base_permissions, owner).await;
             let _ = this.update_in(cx, |this, window, cx| {
-                // The user may have clicked another guild while this request
-                // was in flight; drop the stale response.
-                if this.selected_guild != Some(guild_id) {
-                    return;
-                }
+                this.fetching_guild_channels.remove(&guild_id);
                 match result {
                     Ok(channels) => {
                         for channel in &channels {
@@ -160,18 +183,86 @@ impl HomeScreen {
                                 this.unreads.note_latest(channel.id, latest);
                             }
                         }
-                        this.channel_groups = build_channel_groups(channels);
-                        if let Some(channel_id) = this.first_text_channel() {
-                            this.select_channel(channel_id, window, cx);
-                        }
+                        this.set_guild_channels(guild_id, channels, window, cx);
                     }
-                    Err(err) => this.channels_error = Some(err),
+                    // A failed refetch leaves the list that's on screen.
+                    Err(err) if this.channels_loading && this.selected_guild == Some(guild_id) => {
+                        this.channels_error = Some(err);
+                        this.channels_loading = false;
+                        cx.notify();
+                    }
+                    Err(err) => eprintln!("refreshing a guild's channels failed: {err}"),
                 }
-                this.channels_loading = false;
-                cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Takes a guild's channels as they now stand, from the gateway or a
+    /// fetch, and redraws the sidebar if it's the open guild's.
+    pub(in crate::screens::home) fn set_guild_channels(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        channels: Vec<Channel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stale_guild_channels.remove(&guild_id);
+        let open = self.view == View::Guild && self.selected_guild == Some(guild_id);
+        if open {
+            self.channel_groups = build_channel_groups(channels.clone());
+        }
+        self.guild_channels.insert(guild_id, channels);
+        if !open {
+            return;
+        }
+        // The list was loading with nothing open, or the open channel is
+        // gone from it.
+        if self.channels_loading
+            || self
+                .selected_channel
+                .is_none_or(|id| self.channel_info(id).is_none())
+        {
+            self.channels_loading = false;
+            self.channels_error = None;
+            self.selected_channel = None;
+            self.open_guild_channel(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Marks a guild's channel list out of date: a channel in it changed, or
+    /// something deciding which the user can see. The open guild's is
+    /// refetched now; any other's when it's next opened.
+    pub(in crate::screens::home) fn invalidate_guild_channels(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.guild_channels.contains_key(&guild_id) {
+            return;
+        }
+        self.stale_guild_channels.insert(guild_id);
+        if self.view == View::Guild && self.selected_guild == Some(guild_id) {
+            self.fetch_guild_channels(guild_id, window, cx);
+        }
+    }
+
+    /// Opens the channel last open in the selected guild, or its first text
+    /// channel when that's gone or there wasn't one.
+    fn open_guild_channel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let last = self
+            .selected_guild
+            .and_then(|guild_id| self.last_guild_channel.get(&guild_id))
+            .copied()
+            .filter(|&id| {
+                self.channel_info(id)
+                    .is_some_and(|channel| !channel.kind.is_voice())
+            });
+        if let Some(channel_id) = last.or_else(|| self.first_text_channel()) {
+            self.select_channel(channel_id, window, cx);
+        }
     }
 
     fn load_collapsed_categories(&mut self) {

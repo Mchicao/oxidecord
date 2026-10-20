@@ -11,8 +11,8 @@ use crate::screens::home::{HomeScreen, View};
 
 impl HomeScreen {
     /// Switches the sidebar to the direct-message list, clearing the currently
-    /// open conversation. The DM list is fetched the first time and reused on
-    /// subsequent opens.
+    /// open conversation. The DM list is fetched at startup and kept up to
+    /// date from there; this only fetches it again after that failed.
     pub(in crate::screens::home) fn open_direct_messages(
         &mut self,
         window: &mut Window,
@@ -33,7 +33,7 @@ impl HomeScreen {
         }
     }
 
-    fn load_dms(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::screens::home) fn load_dms(&mut self, cx: &mut Context<Self>) {
         self.dms_error = None;
         self.dms_loading = true;
         cx.notify();

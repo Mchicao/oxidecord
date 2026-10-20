@@ -8,6 +8,7 @@ use twilight_model::id::{
 };
 
 use crate::discord::{self, MessagePage};
+use crate::screens::home::history_cache::merge_latest;
 use crate::screens::home::{HomeScreen, View};
 
 impl HomeScreen {
@@ -22,6 +23,11 @@ impl HomeScreen {
         }
         self.save_collapsed_categories();
         self.selected_channel = Some(channel_id);
+        if self.view == View::Guild
+            && let Some(guild_id) = self.selected_guild
+        {
+            self.last_guild_channel.insert(guild_id, channel_id);
+        }
         // A DM's call that started before this session did is only reported
         // on request, and the call view needs to know it's there.
         if self.view == View::DirectMessages
@@ -52,7 +58,18 @@ impl HomeScreen {
             .flatten();
         self.reset_conversation(placeholder, window, cx);
         self.unread_marker = marker;
-        self.messages_loading = true;
+        // Opened before, it's drawn from what was there then while the
+        // newest page is fetched, which is merged in when it lands.
+        match self.history_cache.take(channel_id) {
+            Some(cached) => {
+                self.messages = cached.messages;
+                self.reached_oldest = cached.reached_oldest;
+                self.messages_channel = Some(channel_id);
+                self.request_author_members();
+                self.messages_list.reset(self.messages.len());
+            }
+            None => self.messages_loading = true,
+        }
         self.fetch_opening_page(channel_id, marker, window, cx);
     }
 
@@ -70,6 +87,7 @@ impl HomeScreen {
             return;
         }
         self.messages.clear();
+        self.messages_channel = None;
         self.messages_list.reset(0);
         self.reactors.clear();
         self.older_loading = false;
@@ -111,27 +129,46 @@ impl HomeScreen {
                 if this.selected_channel != Some(channel_id) {
                     return;
                 }
+                // Drawn from the cache meanwhile, the newest page is merged
+                // into what's shown, which keeps the scroll where it is.
+                let refreshing = !this.messages_loading;
                 this.messages_loading = false;
                 match result {
-                    Ok((messages, latest)) => {
+                    Ok((messages, true)) if refreshing => {
                         let full = messages.len() == page_size;
-                        this.reached_oldest = latest && !full;
-                        this.reached_newest = latest || !full;
-                        this.messages = messages;
-                        this.request_author_members();
-                        // Resetting also snaps the bottom-aligned list to the
-                        // newest message.
-                        this.messages_list.reset(this.messages.len());
-                        // Opened just past the last read message, the read
-                        // ones above it give the divider something to sit
-                        // under.
-                        if !latest {
-                            this.load_older_messages(cx);
-                        }
-                        if unread_after.is_some() {
-                            this.scroll_to_unread(window, cx);
+                        let before = this.messages.len();
+                        match merge_latest(&mut this.messages, messages, !full) {
+                            Ok(ix) => {
+                                if !full {
+                                    this.reached_oldest = true;
+                                }
+                                // An older page asked for of the head that
+                                // was just replaced won't land.
+                                if ix == 0 {
+                                    this.older_loading = false;
+                                }
+                                this.request_author_members();
+                                this.splice_messages(ix..before, this.messages.len() - ix);
+                                if this.at_bottom {
+                                    this.messages_list.scroll_to(ListOffset {
+                                        item_ix: this.messages.len(),
+                                        offset_in_item: px(0.),
+                                    });
+                                }
+                                if unread_after.is_some() {
+                                    this.scroll_to_unread(window, cx);
+                                }
+                            }
+                            Err(page) => {
+                                this.show_opening_page(page, true, unread_after, window, cx)
+                            }
                         }
                     }
+                    Ok((messages, latest)) => {
+                        this.show_opening_page(messages, latest, unread_after, window, cx);
+                    }
+                    // What the cache showed stays up.
+                    Err(err) if refreshing => eprintln!("refreshing a conversation failed: {err}"),
                     Err(err) => this.messages_error = Some(err),
                 }
                 this.ack_open_conversation(cx);
@@ -139,6 +176,36 @@ impl HomeScreen {
             });
         })
         .detach();
+    }
+
+    /// Replaces the conversation with the page it opens on.
+    fn show_opening_page(
+        &mut self,
+        messages: Vec<discord::Message>,
+        latest: bool,
+        unread_after: Option<Id<MessageMarker>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let full = messages.len() == discord::MESSAGE_PAGE_SIZE;
+        self.reached_oldest = latest && !full;
+        self.reached_newest = latest || !full;
+        self.messages = messages;
+        self.messages_channel = self.selected_channel;
+        // An older page asked for of what the cache showed would land against
+        // the wrong messages.
+        self.older_loading = false;
+        self.request_author_members();
+        // Resetting also snaps the bottom-aligned list to the newest message.
+        self.messages_list.reset(self.messages.len());
+        // Opened just past the last read message, the read ones above it give
+        // the divider something to sit under.
+        if !latest {
+            self.load_older_messages(cx);
+        }
+        if unread_after.is_some() {
+            self.scroll_to_unread(window, cx);
+        }
     }
 
     /// Puts the first unread message at the top of the view.
@@ -184,6 +251,14 @@ impl HomeScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(channel_id) = self.messages_channel.take()
+            && self.messages_error.is_none()
+            && self.reached_newest
+        {
+            let messages = std::mem::take(&mut self.messages);
+            self.history_cache
+                .store(channel_id, messages, self.reached_oldest);
+        }
         self.messages.clear();
         self.messages_list.reset(0);
         self.reactors.clear();

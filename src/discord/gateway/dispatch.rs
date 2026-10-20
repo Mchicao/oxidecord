@@ -10,7 +10,7 @@ use twilight_model::util::Timestamp;
 use crate::discord::model::{
     RawEmoji, RawGuildChannel, RawGuildSettings, RawMember, RawMemberListUpdate, RawRole,
     RawVoiceServer, RawVoiceState, StreamServerInfo, convert_call_voice_states,
-    convert_channel_unreads, convert_guild_emoji, convert_guild_unreads,
+    convert_channel_unreads, convert_guild_channels, convert_guild_emoji,
     convert_guild_voice_states, convert_member_list_update, convert_message, convert_mute_settings,
     convert_reaction_emoji, convert_read_states, convert_role, convert_stream_server,
     convert_voice_server, convert_voice_state, parse_user_settings,
@@ -59,7 +59,7 @@ pub(super) fn dispatch(
                     presences.append(&mut guild.presences);
                     let merged = merged.next().unwrap_or_default();
                     let owner_id = guild.owner_id();
-                    unreads.extend(guild_unreads(
+                    unreads.extend(guild_channels(
                         guild.id,
                         ready.user.id,
                         owner_id,
@@ -227,8 +227,8 @@ pub(super) fn dispatch(
         "GUILD_CREATE" => serde_json::from_str::<GatewayGuild>(data)
             .map(|guild| {
                 let owner_id = guild.owner_id();
-                let unreads = self_id.and_then(|self_id| {
-                    guild_unreads(
+                let channels = match *self_id {
+                    Some(self_id) => guild_channels(
                         guild.id,
                         self_id,
                         owner_id,
@@ -236,8 +236,9 @@ pub(super) fn dispatch(
                         &guild.roles,
                         &guild.members,
                         guild.channels,
-                    )
-                });
+                    ),
+                    None => Vec::new(),
+                };
                 let voice = GatewayEvent::GuildVoiceStates {
                     guild_id: guild.id,
                     states: convert_guild_voice_states(
@@ -249,12 +250,22 @@ pub(super) fn dispatch(
                 let presences = GatewayEvent::Presences(convert_presences(guild.presences));
                 std::iter::once(voice)
                     .chain(std::iter::once(presences))
-                    .chain(unreads)
+                    .chain(channels)
                     .chain(guild_emojis(guild.id, guild.emojis))
                     .chain(guild_roles(guild.id, guild.roles, guild.members))
                     .collect()
             })
             .unwrap_or_default(),
+        // Working the change out here would take every guild's roles and the
+        // user's member kept on this side; the list is refetched instead, the
+        // next time it's looked at.
+        "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "CHANNEL_DELETE" => {
+            serde_json::from_str::<ChannelChangePayload>(data)
+                .ok()
+                .and_then(|channel| channel.guild_id)
+                .map(|guild_id| vec![GatewayEvent::GuildChannelsChanged { guild_id }])
+                .unwrap_or_default()
+        }
         "GUILD_DELETE" => serde_json::from_str::<GuildDeletePayload>(data)
             .map(|guild| {
                 vec![GatewayEvent::GuildVoiceStates {
@@ -356,10 +367,11 @@ pub(super) fn dispatch(
     }
 }
 
-/// A guild's channels as an unread event, unless it arrived without any —
-/// an unavailable guild, which says nothing about them. `members` is
-/// searched for the signed-in user's own, whose roles decide what they see.
-fn guild_unreads<'a>(
+/// A guild's channels as events — the sidebar's list and its unread mark —
+/// unless it arrived without any: an unavailable guild, which says nothing
+/// about them. `members` is searched for the signed-in user's own, whose
+/// roles decide what they see.
+fn guild_channels<'a>(
     guild_id: Id<GuildMarker>,
     self_id: Id<UserMarker>,
     owner_id: Option<Id<UserMarker>>,
@@ -367,15 +379,15 @@ fn guild_unreads<'a>(
     roles: &[RawRole],
     members: impl IntoIterator<Item = &'a RawMember>,
     channels: Vec<RawGuildChannel>,
-) -> Option<GatewayEvent> {
+) -> Vec<GatewayEvent> {
     if channels.is_empty() {
-        return None;
+        return Vec::new();
     }
     let member_roles = members
         .into_iter()
         .find(|member| member.user_id() == Some(self_id))
         .map(|member| member.roles.as_slice());
-    Some(GatewayEvent::GuildUnreads(convert_guild_unreads(
+    let (unreads, channels) = convert_guild_channels(
         guild_id,
         self_id,
         owner_id,
@@ -383,7 +395,11 @@ fn guild_unreads<'a>(
         roles,
         member_roles,
         channels,
-    )))
+    );
+    vec![
+        GatewayEvent::GuildUnreads(unreads),
+        GatewayEvent::GuildChannels { guild_id, channels },
+    ]
 }
 
 /// A guild's emoji as an event, unless the guild arrived without its list.

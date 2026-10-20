@@ -28,6 +28,7 @@ use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
 use super::emoji::PickerRow;
 use super::folders::RailEntry;
+use super::history_cache::HistoryCache;
 use super::unread::Unreads;
 use super::voice::{PendingVoice, ScreenShare, StreamWatch, VoiceCall};
 use crate::voice::VoiceEngine;
@@ -281,6 +282,18 @@ pub struct HomeScreen {
     pub(super) loading: bool,
     pub(super) error: Option<String>,
     pub(super) channel_groups: Vec<ChannelGroup>,
+    /// Every guild's channels as far as they're known: from the gateway,
+    /// which sends them all with `READY`, or from a fetch where it hasn't
+    /// yet. Opening a guild draws its list from here at once.
+    pub(super) guild_channels: HashMap<Id<GuildMarker>, Vec<discord::Channel>>,
+    /// Guilds whose list in `guild_channels` has changed since it was sent.
+    /// Opening one still draws what's there, and refetches it underneath.
+    pub(super) stale_guild_channels: HashSet<Id<GuildMarker>>,
+    /// Guilds whose channels are being fetched, so a refetch isn't sent twice.
+    pub(super) fetching_guild_channels: HashSet<Id<GuildMarker>>,
+    /// The channel last open in each guild, which going back to the guild
+    /// reopens, as Discord's does.
+    pub(super) last_guild_channel: HashMap<Id<GuildMarker>, Id<ChannelMarker>>,
     pub(super) selected_channel: Option<Id<ChannelMarker>>,
     /// The user's DM conversations, loaded lazily the first time the DM view is
     /// opened. A selected DM reuses `selected_channel` and the message plumbing.
@@ -308,6 +321,12 @@ pub struct HomeScreen {
     pub(super) channels_loading: bool,
     pub(super) channels_error: Option<String>,
     pub(super) messages: Vec<discord::Message>,
+    /// The conversation `messages` belong to, once they've arrived. What's
+    /// cached when it's left.
+    pub(super) messages_channel: Option<Id<ChannelMarker>>,
+    /// Recently opened conversations, which reopen from here before their
+    /// newest page is fetched.
+    pub(super) history_cache: HistoryCache,
     pub(super) messages_loading: bool,
     pub(super) messages_error: Option<String>,
     pub(super) older_loading: bool,
@@ -524,6 +543,10 @@ impl HomeScreen {
             loading: true,
             error: None,
             channel_groups: Vec::new(),
+            guild_channels: HashMap::new(),
+            stale_guild_channels: HashSet::new(),
+            fetching_guild_channels: HashSet::new(),
+            last_guild_channel: HashMap::new(),
             selected_channel: None,
             dms: Vec::new(),
             dms_loading: false,
@@ -539,6 +562,8 @@ impl HomeScreen {
             channels_loading: false,
             channels_error: None,
             messages: Vec::new(),
+            messages_channel: None,
+            history_cache: HistoryCache::default(),
             messages_loading: false,
             messages_error: None,
             older_loading: false,
@@ -606,7 +631,10 @@ impl HomeScreen {
         this.load_guilds(window, cx);
         this.load_user_settings(cx);
         this.load_current_user(cx);
-        this.start_gateway(cx);
+        // Fetched up front, so the DM list is there the first time it's
+        // opened rather than loading then.
+        this.load_dms(cx);
+        this.start_gateway(window, cx);
         // Seeds the focus path so the root element's key listeners are live
         // from the first frame, before anything has been clicked.
         this.focus_handle.focus(window);

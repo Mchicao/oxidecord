@@ -18,6 +18,7 @@ use twilight_model::util::Timestamp;
 use twilight_util::permission_calculator::PermissionCalculator;
 
 use super::RawRole;
+use super::channel::{Channel, GuildChannelFields, guild_channel};
 
 /// Milliseconds from the Unix epoch to Discord's, which snowflakes count from.
 const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
@@ -79,13 +80,19 @@ pub(in crate::discord) struct RawChannelUnread {
     last_message_id: Option<Id<MessageMarker>>,
 }
 
-/// A channel in a gateway guild, of which only what decides its unread mark
-/// is read.
+/// A channel in a gateway guild, of which only what the sidebar shows and
+/// what decides its unread mark is read.
 #[derive(Deserialize)]
 pub(in crate::discord) struct RawGuildChannel {
     id: Id<ChannelMarker>,
     #[serde(rename = "type")]
     kind: ChannelType,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    position: Option<i32>,
+    #[serde(default)]
+    topic: Option<String>,
     #[serde(default)]
     parent_id: Option<Id<ChannelMarker>>,
     #[serde(default, deserialize_with = "snowflake")]
@@ -186,14 +193,17 @@ pub(in crate::discord) fn convert_channel_unreads(
         .collect()
 }
 
-/// The guild's channels that count toward its unread mark: text and
-/// announcement channels the user can view. Voice channels' text chats and
-/// forum posts are left out, since the app can't open them to read them.
+/// A guild's channels from a gateway guild: the sidebar's list, and the ones
+/// that count toward its unread mark — text and announcement channels the
+/// user can view. Voice channels' text chats and forum posts are left out of
+/// the latter, since the app can't open them to read them.
 ///
-/// Visibility is worked out the way the channel list's fetch does, from the
-/// roles in the same payload. `member_roles` is `None` when the user's member
-/// didn't come with it, which leaves only what `@everyone` can see.
-pub(in crate::discord) fn convert_guild_unreads(
+/// This is how Discord's own client gets a guild's channels: they all come
+/// with `READY`, so opening a guild needs no request. Visibility is worked
+/// out from the roles in the same payload. `member_roles` is `None` when the
+/// user's member didn't come with it, which leaves only what `@everyone` can
+/// see.
+pub(in crate::discord) fn convert_guild_channels(
     guild_id: Id<GuildMarker>,
     user_id: Id<UserMarker>,
     owner_id: Option<Id<UserMarker>>,
@@ -201,7 +211,7 @@ pub(in crate::discord) fn convert_guild_unreads(
     roles: &[RawRole],
     member_roles: Option<&[Id<RoleMarker>]>,
     channels: Vec<RawGuildChannel>,
-) -> GuildUnreads {
+) -> (GuildUnreads, Vec<Channel>) {
     let role_permissions = |id: Id<RoleMarker>| {
         roles
             .iter()
@@ -218,36 +228,45 @@ pub(in crate::discord) fn convert_guild_unreads(
         .map(|&id| (id, role_permissions(id)))
         .collect();
 
-    let channels = channels
-        .into_iter()
-        .filter(|channel| {
-            matches!(
-                channel.kind,
-                ChannelType::GuildText | ChannelType::GuildAnnouncement
-            )
-        })
-        .filter(|channel| {
-            let mut calculator =
-                PermissionCalculator::new(guild_id, user_id, everyone, &member_roles);
-            if owner_id == Some(user_id) {
-                calculator = calculator.owner_id(user_id);
-            }
-            calculator
-                .in_channel(channel.kind, &channel.permission_overwrites)
-                .contains(Permissions::VIEW_CHANNEL)
-        })
-        .map(|channel| UnreadChannel {
+    let mut unread_channels = Vec::new();
+    let mut visible = Vec::new();
+    for channel in channels {
+        let mut calculator = PermissionCalculator::new(guild_id, user_id, everyone, &member_roles);
+        if owner_id == Some(user_id) {
+            calculator = calculator.owner_id(user_id);
+        }
+        let permissions = calculator.in_channel(channel.kind, &channel.permission_overwrites);
+        if !permissions.contains(Permissions::VIEW_CHANNEL) {
+            continue;
+        }
+        if matches!(
+            channel.kind,
+            ChannelType::GuildText | ChannelType::GuildAnnouncement
+        ) {
+            unread_channels.push(UnreadChannel {
+                id: channel.id,
+                parent_id: channel.parent_id,
+                last_message_id: channel.last_message_id,
+            });
+        }
+        visible.extend(guild_channel(GuildChannelFields {
             id: channel.id,
+            kind: channel.kind,
+            name: channel.name,
             parent_id: channel.parent_id,
+            position: channel.position,
+            topic: channel.topic,
             last_message_id: channel.last_message_id,
-        })
-        .collect();
+            permissions,
+        }));
+    }
 
-    GuildUnreads {
+    let unreads = GuildUnreads {
         guild_id,
         joined: joined_at.and_then(timestamp_snowflake),
-        channels,
-    }
+        channels: unread_channels,
+    };
+    (unreads, visible)
 }
 
 /// The lowest snowflake minted at `timestamp`.
@@ -339,10 +358,14 @@ mod tests {
         )
         .unwrap();
 
-        let unreads =
-            convert_guild_unreads(Id::new(10), Id::new(1), None, None, &roles, None, channels);
+        let (unreads, visible) =
+            convert_guild_channels(Id::new(10), Id::new(1), None, None, &roles, None, channels);
         let ids: Vec<_> = unreads.channels.iter().map(|channel| channel.id).collect();
         assert_eq!(ids, [Id::new(100)]);
+        // The sidebar keeps the voice channel and the category, but not the
+        // hidden channel.
+        let ids: Vec<_> = visible.iter().map(|channel| channel.id).collect();
+        assert_eq!(ids, [Id::new(100), Id::new(102), Id::new(103)]);
     }
 
     #[test]

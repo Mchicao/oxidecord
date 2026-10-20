@@ -12,6 +12,7 @@ mod channels;
 mod data;
 mod emoji;
 mod folders;
+mod history_cache;
 mod state;
 mod unread;
 mod view;

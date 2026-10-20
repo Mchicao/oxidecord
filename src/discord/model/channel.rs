@@ -1,6 +1,7 @@
 //! Guild channels and direct-message conversations.
 
 use twilight_model::channel::ChannelType;
+use twilight_model::guild::Permissions;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker, UserMarker},
@@ -38,7 +39,7 @@ pub struct Channel {
     /// together.
     pub topic: Option<Vec<Inline>>,
     /// Whether the current user may post here, resolved from the channel's
-    /// overwrites when the channel list is fetched.
+    /// overwrites when the channel list is built.
     pub can_send: bool,
     /// Whether the current user holds `MANAGE_MESSAGES` here, which is what
     /// lets them delete other people's messages.
@@ -79,16 +80,40 @@ impl DirectMessage {
     }
 }
 
-/// Converts a guild channel, dropping the types the UI can't display (threads,
-/// directories, ...).
+/// Converts a guild channel fetched over REST, dropping the types the UI
+/// can't display (threads, directories, ...). `permissions` are the user's in
+/// it, overwrites applied.
 pub(in crate::discord) fn convert_channel(
     channel: twilight_model::channel::Channel,
-    can_send: bool,
-    can_manage_messages: bool,
-    can_use_external_emoji: bool,
-    can_mention_everyone: bool,
+    permissions: Permissions,
 ) -> Option<Channel> {
-    let kind = match channel.kind {
+    guild_channel(GuildChannelFields {
+        id: channel.id,
+        kind: channel.kind,
+        name: channel.name,
+        parent_id: channel.parent_id,
+        position: channel.position,
+        topic: channel.topic,
+        last_message_id: channel.last_message_id.map(Id::cast),
+        permissions,
+    })
+}
+
+/// A guild channel's fields, wherever they were read from: a REST channel or
+/// one inside a gateway guild.
+pub(super) struct GuildChannelFields {
+    pub id: Id<ChannelMarker>,
+    pub kind: ChannelType,
+    pub name: Option<String>,
+    pub parent_id: Option<Id<ChannelMarker>>,
+    pub position: Option<i32>,
+    pub topic: Option<String>,
+    pub last_message_id: Option<Id<MessageMarker>>,
+    pub permissions: Permissions,
+}
+
+pub(super) fn guild_channel(fields: GuildChannelFields) -> Option<Channel> {
+    let kind = match fields.kind {
         ChannelType::GuildText => ChannelKind::Text,
         ChannelType::GuildAnnouncement => ChannelKind::Announcement,
         ChannelType::GuildVoice => ChannelKind::Voice,
@@ -97,22 +122,23 @@ pub(in crate::discord) fn convert_channel(
         ChannelType::GuildCategory => ChannelKind::Category,
         _ => return None,
     };
+    let permissions = fields.permissions;
 
     Some(Channel {
-        id: channel.id,
-        name: channel.name.unwrap_or_default(),
+        id: fields.id,
+        name: fields.name.unwrap_or_default(),
         kind,
-        parent_id: channel.parent_id,
-        position: channel.position.unwrap_or(0),
-        topic: channel
+        parent_id: fields.parent_id,
+        position: fields.position.unwrap_or(0),
+        topic: fields
             .topic
             .filter(|topic| !topic.trim().is_empty())
             .map(|topic| markdown::parse_preview(&topic)),
-        can_send,
-        can_manage_messages,
-        can_use_external_emoji,
-        can_mention_everyone,
-        last_message_id: channel.last_message_id.map(Id::cast),
+        can_send: permissions.contains(Permissions::SEND_MESSAGES),
+        can_manage_messages: permissions.contains(Permissions::MANAGE_MESSAGES),
+        can_use_external_emoji: permissions.contains(Permissions::USE_EXTERNAL_EMOJIS),
+        can_mention_everyone: permissions.contains(Permissions::MENTION_EVERYONE),
+        last_message_id: fields.last_message_id,
     })
 }
 

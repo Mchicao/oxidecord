@@ -80,15 +80,7 @@ pub async fn fetch_channels(
 
                 permissions
                     .contains(Permissions::VIEW_CHANNEL)
-                    .then(|| {
-                        convert_channel(
-                            channel,
-                            permissions.contains(Permissions::SEND_MESSAGES),
-                            permissions.contains(Permissions::MANAGE_MESSAGES),
-                            permissions.contains(Permissions::USE_EXTERNAL_EMOJIS),
-                            permissions.contains(Permissions::MENTION_EVERYONE),
-                        )
-                    })
+                    .then(|| convert_channel(channel, permissions))
                     .flatten()
             })
             .collect())

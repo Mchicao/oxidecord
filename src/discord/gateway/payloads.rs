@@ -214,6 +214,14 @@ pub(super) struct EmojisUpdatePayload {
     pub(super) emojis: Vec<RawEmoji>,
 }
 
+/// `CHANNEL_CREATE`, `CHANNEL_UPDATE`, and `CHANNEL_DELETE`, of which only
+/// the guild is read. A DM's has none.
+#[derive(Deserialize)]
+pub(super) struct ChannelChangePayload {
+    #[serde(default)]
+    pub(super) guild_id: Option<Id<GuildMarker>>,
+}
+
 /// `GUILD_DELETE`: the user left the guild, or it went unavailable.
 #[derive(Deserialize)]
 pub(super) struct GuildDeletePayload {
