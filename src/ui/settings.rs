@@ -233,8 +233,10 @@ fn theme_card(preset: Rc<ThemeConfig>, selected: bool, cx: &mut App) -> Stateful
     let title_bar = color(&colors.title_bar, sidebar);
     let primary = color(&colors.primary, foreground);
     let outline = color(&colors.border, foreground.alpha(0.2));
-    // `overflow_hidden` clips to the rectangle, not the rounded corners, so the
-    // children that reach the corners round themselves to sit inside the border.
+    // The children that reach the corners round themselves to sit inside the
+    // border. Not `overflow_hidden`: it wouldn't clip the rounded corners anyway,
+    // and gpui rounds a clip out to whole device pixels, so a card scrolled
+    // just past the list's edge would leave a sliver of its title bar there.
     let inner_radius = (cx.theme().radius - px(1.)).max(px(0.));
 
     card_frame(name.clone(), selected, cx)
@@ -245,7 +247,6 @@ fn theme_card(preset: Rc<ThemeConfig>, selected: bool, cx: &mut App) -> Stateful
                 .w_full()
                 .h(px(PREVIEW_HEIGHT))
                 .rounded(cx.theme().radius)
-                .overflow_hidden()
                 .border_1()
                 .border_color(outline)
                 .bg(background)
