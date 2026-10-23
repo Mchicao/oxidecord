@@ -1,6 +1,6 @@
 //! Opening the pinned-messages popout and loading the pins behind it.
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::screens::home::{HomeScreen, PinsPopup};

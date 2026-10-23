@@ -10,9 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState, TextareaState};
-use gpui_component::slider::SliderState;
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::slider::SliderState;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},

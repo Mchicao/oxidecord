@@ -1,7 +1,7 @@
 //! Online statuses: the user's own, picked from the account panel, and
 //! everyone else's as the gateway reports them.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::UserMarker};
 
 use crate::discord;

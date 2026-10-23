@@ -1,11 +1,11 @@
 //! The scrolling message list, and the skeleton shown in its place while a
 //! conversation loads.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, h_flex, skeleton::Skeleton, spinner::Spinner, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 use crate::ui::button::Button;

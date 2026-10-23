@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, h_flex, slider::Slider, spinner::Spinner, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::screens::home::HomeScreen;

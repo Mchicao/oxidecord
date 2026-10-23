@@ -1,7 +1,7 @@
 //! Opening a conversation, at the first unread message when there is one, and
 //! paging through its history either way from there.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker},

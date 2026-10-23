@@ -7,8 +7,8 @@
 
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::GuildMarker};
 
 use crate::discord::{self, GuildEmoji};

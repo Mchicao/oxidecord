@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, UserMarker},

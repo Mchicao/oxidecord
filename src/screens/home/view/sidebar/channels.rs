@@ -1,7 +1,7 @@
 //! The guild sidebar: the channel list under the guild's name.
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex, skeleton::Skeleton, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, skeleton::Skeleton, v_flex};
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 

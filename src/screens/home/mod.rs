@@ -18,7 +18,7 @@ mod unread;
 mod view;
 mod voice;
 
-use gpui::{EventEmitter, actions};
+use gpui_kit::{EventEmitter, actions};
 
 pub use state::HomeScreen;
 

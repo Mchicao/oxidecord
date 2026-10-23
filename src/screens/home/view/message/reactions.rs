@@ -1,7 +1,7 @@
 //! The row of reaction pills under a message's content.
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::*;
 
 use super::reactors::ReactionTooltip;
 use crate::discord;

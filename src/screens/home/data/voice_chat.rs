@@ -3,7 +3,7 @@
 //! It isn't a conversation of its own: while it's open, the voice channel is
 //! the selected channel and the ordinary message plumbing serves it.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::ChannelMarker};
 
 use crate::screens::home::HomeScreen;

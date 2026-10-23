@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::discord;
 

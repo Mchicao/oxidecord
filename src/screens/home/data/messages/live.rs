@@ -1,7 +1,7 @@
 //! The gateway connection that keeps the open conversation live, and the call
 //! events that ride alongside it.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::Id;
 
 use crate::discord;

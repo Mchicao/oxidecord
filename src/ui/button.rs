@@ -12,12 +12,12 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable, Icon, Selectable, Sizable, Size, StyledExt as _,
     menu::DropdownMenu, spinner::Spinner,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::ui::depth::{self, Finish, Level, Lit as _, radius};
 use crate::ui::tooltip;

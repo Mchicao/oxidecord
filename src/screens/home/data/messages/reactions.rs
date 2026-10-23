@@ -1,7 +1,7 @@
 //! Reacting to a message, applied locally first and rolled back if the request
 //! fails, taking reactions made anywhere else, and fetching who reacted.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker, UserMarker},

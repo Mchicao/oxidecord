@@ -16,8 +16,8 @@
 //! shadows and much fainter highlights, which is how light actually falls on a
 //! dark surface.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 
 /// How far above or into the page something sits.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -224,7 +224,7 @@ pub fn card(radius: Pixels, cx: &App) -> Div {
 
 /// Corner radii, one per kind of thing, so everything of a kind matches.
 pub mod radius {
-    use gpui::{Pixels, px};
+    use gpui_kit::{Pixels, px};
 
     /// Buttons, inputs, and other controls at their default size.
     pub const CONTROL: Pixels = px(10.);

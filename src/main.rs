@@ -11,8 +11,8 @@ mod voice;
 
 use std::sync::Arc;
 
-use gpui::*;
-use gpui_component::{Root, input};
+use gpui_kit::component::{Root, input};
+use gpui_kit::*;
 
 use crate::screens::app::AppScreen;
 use crate::screens::home::{
@@ -32,12 +32,12 @@ fn main() {
     unsafe {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
-    let app = gpui_platform::application()
+    let app = gpui_kit::platform::application()
         .with_assets(assets::Assets)
         .with_http_client(Arc::new(platform::http::ReqwestClient::new()));
 
     app.run(|cx: &mut App| {
-        gpui_component::init(cx);
+        gpui_kit::component::init(cx);
         ui::theme::init(cx);
         platform::updater::init(cx);
 
@@ -50,7 +50,7 @@ fn main() {
         ]);
 
         // These share the input's own context depth, where a later binding
-        // wins, so they have to be bound after `gpui_component::init`. In both
+        // wins, so they have to be bound after `gpui_kit::component::init`. In both
         // the composer and the edit box, enter sends and shift-enter is handed
         // the input's own enter, which starts a new line, as in Discord.
         let edit_input = format!("{EDIT_CONTEXT} > Input");

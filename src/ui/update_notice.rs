@@ -9,9 +9,7 @@
 //! ticks over in place instead of re-pushing (and re-animating) the toast for
 //! every percent. Closing it hides it only until the next piece of news.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Root, Sizable as _, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -19,6 +17,8 @@ use gpui_component::{
     progress::Progress,
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::platform::updater::{self, Status, Updater};
 

@@ -6,9 +6,9 @@
 //! there, and the space beside it drags the window (see
 //! [`crate::screens::home::view::content::header`]).
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 /// Width of a single control. Matches the Windows shell's own caption buttons,
 /// so the cluster reads as a title bar even though it sits in the app's header.

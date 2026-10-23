@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedSender;
-use gpui::RenderImage;
+use gpui_kit::RenderImage;
 
 use crate::platform::capture::CaptureSource;
 use crate::platform::h264::DecoderEvent;

@@ -5,9 +5,7 @@
 //! their own so they can be clicked through. The page stays hidden until it's
 //! asked for through the settings search; see [`crate::ui::settings`].
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
     alert::Alert,
     avatar::{Avatar, AvatarGroup},
@@ -29,11 +27,13 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::ui::button::Button;
 use crate::ui::depth::{self, Finish, Level, Lit as _, media_shadow, radius};
 
-/// Every size a [`Sizable`](gpui_component::Sizable) widget comes in, smallest first.
+/// Every size a [`Sizable`](gpui_kit::component::Sizable) widget comes in, smallest first.
 const SIZES: [(&str, Size); 4] = [
     ("xsmall", Size::XSmall),
     ("small", Size::Small),

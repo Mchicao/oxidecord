@@ -1,6 +1,6 @@
 //! Opening the profile popout and loading the user behind it.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::UserMarker};
 
 use crate::discord;

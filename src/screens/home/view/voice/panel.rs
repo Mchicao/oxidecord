@@ -1,9 +1,9 @@
 //! The call panel above the account panel in the sidebar.
 
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
 };
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 use crate::screens::home::voice::{VoiceCall, VoiceStatus};

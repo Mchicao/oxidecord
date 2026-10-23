@@ -4,7 +4,7 @@
 //! A deletion made here drops the row as soon as the request is sent and puts
 //! it back if it fails; the gateway's echo then finds nothing left to remove.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker},

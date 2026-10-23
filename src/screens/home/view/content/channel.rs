@@ -1,11 +1,11 @@
 //! The guild-channel conversation: its header, messages, and composer.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, separator::Separator,
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord::Channel;
 use crate::screens::home::HomeScreen;

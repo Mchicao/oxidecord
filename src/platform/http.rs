@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use futures::{AsyncReadExt as _, FutureExt as _, future::BoxFuture};
-use gpui::http_client::{AsyncBody, HttpClient, Url, http, http::HeaderValue};
+use gpui_kit::http_client::{AsyncBody, HttpClient, Url, http, http::HeaderValue};
 
 use super::runtime;
 

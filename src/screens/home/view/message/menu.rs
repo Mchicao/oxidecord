@@ -1,12 +1,12 @@
 //! A message's menu of actions, opened from its toolbar's "More" button or by
 //! right-clicking the message.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName,
     menu::{PopupMenu, PopupMenuItem},
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
@@ -164,7 +164,7 @@ impl HomeScreen {
         menu: MessageMenu,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        use gpui_component::menu::ContextMenuExt as _;
+        use gpui_kit::component::menu::ContextMenuExt as _;
 
         let screen = cx.entity().downgrade();
         row.context_menu(move |popup, _, cx| {

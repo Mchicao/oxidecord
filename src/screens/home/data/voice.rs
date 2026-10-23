@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},

@@ -1,8 +1,8 @@
 //! Tooltips: small and inverted — the foreground colour as the fill,
 //! so a tooltip reads as a label stuck on the UI rather than more of it.
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 

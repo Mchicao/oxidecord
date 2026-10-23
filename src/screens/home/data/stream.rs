@@ -8,7 +8,7 @@
 //! the call sees the user as live; a picker left open or cancelled shouldn't
 //! show as a stream that never starts.
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::platform::capture::{self, CaptureSettings, CaptureSource};

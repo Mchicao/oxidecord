@@ -13,7 +13,7 @@ use std::mem;
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::ui::tooltip;
 

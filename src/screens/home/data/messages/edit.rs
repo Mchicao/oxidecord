@@ -4,11 +4,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::*;
-use gpui_component::WindowExt as _;
-use gpui_component::button::ButtonVariant;
-use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::{Position, TextareaState};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonVariant;
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::input::{Position, TextareaState};
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;

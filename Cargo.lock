@@ -3013,6 +3013,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-kit"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cdcb78553bef8785669e572e79759b0eab47fdd9d318fe0cce1def798189432"
+dependencies = [
+ "gpui-base",
+ "gpui-component",
+ "gpui-kit-assets",
+ "gpui-pre",
+ "gpui-pre-macros",
+ "gpui-pre-platform",
+ "gpui-pre-web",
+]
+
+[[package]]
 name = "gpui-kit-assets"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6191,10 +6206,7 @@ dependencies = [
  "embed-resource",
  "emojis",
  "futures",
- "gpui-component",
- "gpui-kit-assets",
- "gpui-pre",
- "gpui-pre-platform",
+ "gpui-kit",
  "gpui-wry",
  "image",
  "keyring",

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 

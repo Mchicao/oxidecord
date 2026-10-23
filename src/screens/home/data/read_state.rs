@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, MessageMarker},

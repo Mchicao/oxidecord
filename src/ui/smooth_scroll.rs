@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::*;
+use gpui_kit::*;
 
 /// Fraction of the distance still owed handed over each frame. Every frame of a
 /// glide costs a full redraw, so this is a CPU knob as much as a feel one: 0.4
@@ -203,7 +203,7 @@ fn request_step(view: EntityId, due: Instant, window: &Window) {
 #[cfg(test)]
 mod tests {
     use super::{advance, wheel_delta};
-    use gpui::{ScrollDelta, point, px};
+    use gpui_kit::{ScrollDelta, point, px};
 
     #[test]
     fn a_glide_spreads_the_distance_then_lands_exactly() {

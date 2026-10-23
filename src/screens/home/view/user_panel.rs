@@ -2,13 +2,13 @@
 //! Shared by the channel sidebar and the DM sidebar. Clicking the user opens
 //! the status picker.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable, Sizable as _, Theme, h_flex,
     menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord::PresenceStatus;
 use crate::screens::home::HomeScreen;

@@ -1,7 +1,7 @@
 //! Loading the signed-in user, their guilds, and a guild's channels, and
 //! logging them out.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker},

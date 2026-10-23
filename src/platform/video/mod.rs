@@ -49,7 +49,7 @@ const NO_SEEK: u64 = u64::MAX;
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
-    /// Tightly packed BGRA, top row first — the layout [`gpui::RenderImage`]
+    /// Tightly packed BGRA, top row first — the layout [`gpui_kit::RenderImage`]
     /// takes, so there is no conversion left to do on the foreground.
     pub bgra: Vec<u8>,
     /// Where this frame sits in the clip, for the progress bar.
