@@ -16,7 +16,7 @@ use crate::screens::home::{HomeScreen, View};
 use crate::ui::depth::{Finish, Level, Lit as _};
 use crate::ui::tooltip;
 
-use super::unread_pill;
+use super::{mention_badge, unread_pill};
 
 /// Corner radius of the pill behind the selected icon: the icon's own 16px
 /// plus the pill's 4px of padding, so the two curves run parallel.
@@ -41,6 +41,7 @@ impl HomeScreen {
         let theme = cx.theme();
         let rail_bg = theme.sidebar;
         let logo_bg = rgb(0x313338);
+        let dm_mentions = self.dms.iter().map(|dm| self.unreads.mentions(dm.id)).sum();
 
         // The whole rail — the DMs icon, its separator, and the guild list —
         // scrolls as one column, so the icon isn't pinned above the list.
@@ -70,6 +71,7 @@ impl HomeScreen {
                             .bg(logo_bg)
                             .child(img(DISCORD_LOGO.clone()).size(px(28.))),
                     )
+                    .children(rail_badge(dm_mentions, cx))
                     .tooltip(tooltip::text("Direct Messages"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_direct_messages(window, cx);
@@ -87,10 +89,12 @@ impl HomeScreen {
         let guild_name = SharedString::from(guild.name.clone());
         let is_selected = self.view == View::Guild && self.selected_guild == Some(guild_id);
         let unread = !is_selected && self.unreads.is_guild_unread(guild_id);
+        let mentions = self.unreads.guild_mentions(guild_id);
 
         selection_pill(div().id(("guild", guild_id.get())), is_selected, cx)
             .child(guild_avatar(guild, px(48.)))
             .when(unread, |this| this.child(unread_pill(RAIL_GUTTER, cx)))
+            .children(rail_badge(mentions, cx))
             .tooltip(tooltip::text(guild_name))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_guild(guild_id, window, cx);
@@ -123,6 +127,15 @@ impl HomeScreen {
                 .guilds
                 .iter()
                 .any(|guild| self.unreads.is_guild_unread(guild.id));
+        let mentions = if expanded {
+            0
+        } else {
+            folder
+                .guilds
+                .iter()
+                .map(|guild| self.unreads.guild_mentions(guild.id))
+                .sum()
+        };
 
         v_flex()
             .items_center()
@@ -160,6 +173,7 @@ impl HomeScreen {
                             }),
                     )
                     .when(unread, |this| this.child(unread_pill(RAIL_GUTTER, cx)))
+                    .children(rail_badge(mentions, cx))
                     .tooltip(tooltip::text(label))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded_folders.remove(&folder_id) {
@@ -197,6 +211,24 @@ fn selection_pill(frame: Stateful<Div>, selected: bool, cx: &App) -> Stateful<Di
                 cx,
             )
         })
+}
+
+/// A mention badge on a rail icon's bottom-right corner, ringed in the rail's
+/// colour so it reads as cut out of the icon.
+fn rail_badge(mentions: u32, cx: &App) -> Option<Div> {
+    let badge = mention_badge(mentions, cx)?;
+    Some(
+        div()
+            .absolute()
+            // Inside the frame's 4px padding, so the ring overlaps the icon's
+            // corner as Discord's does.
+            .right(px(1.))
+            .bottom(px(1.))
+            .rounded_full()
+            .border(px(3.))
+            .border_color(cx.theme().sidebar)
+            .child(badge),
+    )
 }
 
 /// The first few of a collapsed folder's guilds, tiled inside its square.

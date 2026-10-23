@@ -43,7 +43,6 @@
 | Media channels | Missing | |
 | Stage channels (speakers, audience, raising a hand) | Partial | Joined as a plain voice channel |
 | Announcement channel follow and publish | Missing | Listed and readable only |
-| Mention badges on servers, channels and DMs | Missing | |
 | Server and channel notification settings (all, mentions, nothing, suppress `@everyone`) | Missing | |
 | Muting servers, channels and DMs | Missing | |
 | Member list sidebar with roles, presence and grouping | Partial | Guild text and announcement channels only; group DMs and threads show none, and right-clicking a member does nothing |

@@ -284,16 +284,9 @@ impl HomeScreen {
         }
         // Role mentions only exist in guilds, and the open guild is the
         // message's own.
-        let roles = self
-            .selected_guild
+        self.selected_guild
             .filter(|_| self.view == View::Guild)
-            .and_then(|guild_id| self.self_roles(guild_id));
-        roles.is_some_and(|roles| {
-            message
-                .mention_roles
-                .iter()
-                .any(|role| roles.contains(role))
-        })
+            .is_some_and(|guild_id| self.mentions_self_role(message, guild_id))
     }
 
     /// The first message of an author group: the avatar, name, and timestamp

@@ -168,3 +168,33 @@ fn unread_pill(inset: Pixels, cx: &App) -> Div {
                 .bg(cx.theme().foreground),
         )
 }
+
+/// The red count Discord puts on whatever has unread messages pinging the
+/// user. gpui-component's `Badge` only sits in a corner, without the ring that
+/// cuts it out of an icon, so this is drawn by hand. `None` with no mentions.
+fn mention_badge(count: u32, cx: &App) -> Option<Div> {
+    if count == 0 {
+        return None;
+    }
+    let theme = cx.theme();
+    let label = if count > 99 {
+        "99+".to_owned()
+    } else {
+        count.to_string()
+    };
+    Some(
+        h_flex()
+            .flex_shrink_0()
+            .justify_center()
+            .min_w(px(16.))
+            .h(px(16.))
+            .px(px(4.))
+            .rounded_full()
+            .bg(theme.danger)
+            .text_color(theme.danger_foreground)
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .font_weight(FontWeight::BOLD)
+            .child(label),
+    )
+}

@@ -357,6 +357,7 @@ pub(super) fn dispatch(
                     channel_id: ack.channel_id,
                     message_id: ack.message_id,
                     manual: ack.manual,
+                    mention_count: ack.mention_count,
                 }]
             })
             .unwrap_or_default(),

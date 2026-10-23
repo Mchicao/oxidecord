@@ -10,6 +10,7 @@ use twilight_model::id::{
     marker::{GuildMarker, RoleMarker, UserMarker},
 };
 
+use crate::discord;
 use crate::screens::home::{HomeScreen, View};
 
 impl HomeScreen {
@@ -21,6 +22,21 @@ impl HomeScreen {
     ) -> Option<&[Id<RoleMarker>]> {
         let self_id = self.self_user_id?;
         Some(self.member_roles.get(&guild_id)?.get(&self_id)?)
+    }
+
+    /// Whether a message mentions one of the roles the signed-in user holds
+    /// in `guild_id`.
+    pub(in crate::screens::home) fn mentions_self_role(
+        &self,
+        message: &discord::Message,
+        guild_id: Id<GuildMarker>,
+    ) -> bool {
+        self.self_roles(guild_id).is_some_and(|roles| {
+            message
+                .mention_roles
+                .iter()
+                .any(|role| roles.contains(role))
+        })
     }
 
     /// The colour a user's name takes in the open guild, as packed `0xRRGGBB`:

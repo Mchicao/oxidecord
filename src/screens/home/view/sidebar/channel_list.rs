@@ -11,7 +11,7 @@ use twilight_model::id::{Id, marker::ChannelMarker};
 use crate::discord::Channel;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::channels::{ChannelGroup, channel_icon_path};
-use crate::screens::home::view::{avatar, unread_pill};
+use crate::screens::home::view::{avatar, mention_badge, unread_pill};
 use crate::ui::button::Button;
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
@@ -45,6 +45,7 @@ impl HomeScreen {
         };
         let unread = self.shows_unread(channel);
         let muted = self.unreads.is_muted(channel_id, channel.parent_id);
+        let mentions = self.unreads.mentions(channel_id);
         let group = SharedString::from(format!("channel-{channel_id}"));
 
         h_flex()
@@ -85,6 +86,7 @@ impl HomeScreen {
                     .size_4(),
             )
             .child(div().flex_1().truncate().child(channel.name.clone()))
+            .children(mention_badge(mentions, cx))
             .when(is_voice, |this| {
                 this.child(self.voice_chat_button(channel_id, is_selected, group, cx))
             })
@@ -258,10 +260,13 @@ impl HomeScreen {
             );
 
         // Like Discord, keep the selected channel and the unread ones visible
-        // when their category is collapsed.
+        // when their category is collapsed, and any that pinged the user even
+        // if muted.
         if collapsed {
             for channel in group.channels.iter().filter(|channel| {
-                Some(channel.id) == self.selected_channel || self.shows_unread(channel)
+                Some(channel.id) == self.selected_channel
+                    || self.shows_unread(channel)
+                    || self.unreads.mentions(channel.id) > 0
             }) {
                 collapsible = collapsible.child(self.render_channel_row(channel, cx));
             }

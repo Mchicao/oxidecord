@@ -7,11 +7,11 @@ use std::time::Duration;
 use gpui::*;
 use twilight_model::id::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker},
 };
 
 use crate::discord;
-use crate::screens::home::HomeScreen;
+use crate::screens::home::{HomeScreen, View};
 
 /// How long acks wait to be sent. Following a busy channel live would
 /// otherwise send one per message; this way it's one every so often.
@@ -120,6 +120,34 @@ impl HomeScreen {
         Some((count, !self.reached_newest, first.timestamp_label()))
     }
 
+    /// Whether a message counts toward its channel's mention badge, by the
+    /// rules Discord's client counts them by: a ping of the user by name, of
+    /// everyone, or of one of their roles, unless the guild's settings
+    /// suppress those — and in a DM, every message, unless the conversation
+    /// is muted. The user's own messages never count.
+    pub(in crate::screens::home) fn pings_me(
+        &self,
+        channel_id: Id<ChannelMarker>,
+        guild_id: Option<Id<GuildMarker>>,
+        message: &discord::Message,
+    ) -> bool {
+        let Some(self_id) = self.self_user_id else {
+            return false;
+        };
+        if message.author_id == self_id {
+            return false;
+        }
+        if message.mentions.iter().any(|user| user.id == self_id) {
+            return true;
+        }
+        let Some(guild_id) = guild_id else {
+            return !self.unreads.is_muted(channel_id, None);
+        };
+        let (everyone, roles) = self.unreads.pinged_by(guild_id);
+        (everyone && message.mention_everyone)
+            || (roles && self.mentions_self_role(message, guild_id))
+    }
+
     /// Moves a channel's ack forward at once, and sends it after a moment
     /// along with any others that pile up meanwhile.
     fn queue_ack(
@@ -145,7 +173,7 @@ impl HomeScreen {
                 return;
             };
             for (channel_id, message_id) in acks {
-                if let Err(err) = discord::ack_message(channel_id, message_id, false).await {
+                if let Err(err) = discord::ack_message(channel_id, message_id, false, 0).await {
                     eprintln!("acking channel {channel_id} failed: {err}");
                 }
             }
@@ -171,14 +199,25 @@ impl HomeScreen {
         if let Some(newest) = self.newest_sent_message() {
             self.unreads.note_latest(channel_id, newest);
         }
-        self.unreads.set_acked(channel_id, before);
+        // Discord leaves the client to say how many pings are past the ack,
+        // and only the loaded messages can be counted.
+        let guild_id = self.selected_guild.filter(|_| self.view == View::Guild);
+        let ix = self
+            .messages
+            .partition_point(|message| message.id <= before);
+        let mentions = self.messages[ix..]
+            .iter()
+            .filter(|message| message.delivery == discord::Delivery::Sent)
+            .filter(|message| self.pings_me(channel_id, guild_id, message))
+            .count() as u32;
+        self.unreads.set_acked(channel_id, before, mentions);
         self.pending_acks.remove(&channel_id);
         self.marked_unread = true;
         self.set_unread_marker(Some(before));
         cx.notify();
 
         cx.spawn(async move |_, _| {
-            if let Err(err) = discord::ack_message(channel_id, before, true).await {
+            if let Err(err) = discord::ack_message(channel_id, before, true, mentions).await {
                 eprintln!("marking channel {channel_id} unread failed: {err}");
             }
         })

@@ -7,7 +7,7 @@ use gpui_component::{ActiveTheme as _, h_flex, skeleton::Skeleton, v_flex};
 use crate::discord::DirectMessage;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::view::user_panel::status_indicator;
-use crate::screens::home::view::{avatar, unread_pill};
+use crate::screens::home::view::{avatar, mention_badge, unread_pill};
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
 
@@ -82,6 +82,7 @@ impl HomeScreen {
             })
             .child(avatar)
             .child(div().flex_1().truncate().child(dm.name.clone()))
+            .children(mention_badge(self.unreads.mentions(channel_id), cx))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_channel(channel_id, window, cx);
             }))

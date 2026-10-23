@@ -4,6 +4,10 @@
 //! channel (their acks) and how far each channel has got, and a channel is
 //! unread while the second is past the first. [`Unreads`] keeps both, fed by
 //! the gateway, the REST loads, and the user's own reading.
+//!
+//! Mentions are counted here too, for the red badges. Discord only reports
+//! the count as each session starts and when it's acked; in between, the
+//! client counts the pings that arrive itself, as the official one does.
 
 use std::collections::{HashMap, HashSet};
 
@@ -39,11 +43,23 @@ pub(super) struct Unreads {
     /// Muted channels and categories, by guild — `None` for DMs — so one
     /// guild's settings can be replaced without touching the rest.
     muted_channels: HashMap<Option<GuildId>, HashSet<ChannelId>>,
+    /// Unread messages that ping the user, by channel. A channel with none
+    /// has no entry.
+    mentions: HashMap<ChannelId, u32>,
+    /// Guilds whose `@everyone` pings don't count.
+    suppress_everyone: HashSet<GuildId>,
+    /// Guilds whose role pings don't count.
+    suppress_roles: HashSet<GuildId>,
 }
 
 impl Unreads {
     /// Replaces every channel's ack with a session's read states.
     pub(super) fn set_read_states(&mut self, states: Vec<ReadState>) {
+        self.mentions = states
+            .iter()
+            .filter(|state| state.mention_count > 0)
+            .map(|state| (state.channel_id, state.mention_count))
+            .collect();
         self.acked = states
             .into_iter()
             .map(|state| (state.channel_id, state.last_message_id))
@@ -87,10 +103,16 @@ impl Unreads {
     pub(super) fn set_mutes(&mut self, settings: Vec<MuteSettings>) {
         for settings in settings {
             if let Some(guild_id) = settings.guild_id {
-                if settings.muted {
-                    self.muted_guilds.insert(guild_id);
-                } else {
-                    self.muted_guilds.remove(&guild_id);
+                for (set, on) in [
+                    (&mut self.muted_guilds, settings.muted),
+                    (&mut self.suppress_everyone, settings.suppress_everyone),
+                    (&mut self.suppress_roles, settings.suppress_roles),
+                ] {
+                    if on {
+                        set.insert(guild_id);
+                    } else {
+                        set.remove(&guild_id);
+                    }
                 }
             }
             self.muted_channels.insert(
@@ -138,8 +160,9 @@ impl Unreads {
         self.latest.get(&channel_id).copied()
     }
 
-    /// Moves a channel's ack forward to `message_id`. Returns whether it
-    /// moved: an ack behind the one already held changes nothing.
+    /// Moves a channel's ack forward to `message_id`, which reads its
+    /// mentions too. Returns whether it moved: an ack behind the one already
+    /// held changes nothing.
     pub(super) fn ack(&mut self, channel_id: ChannelId, message_id: MessageId) -> bool {
         if self
             .acked(channel_id)
@@ -148,12 +171,59 @@ impl Unreads {
             return false;
         }
         self.acked.insert(channel_id, message_id);
+        self.mentions.remove(&channel_id);
         true
     }
 
-    /// Sets a channel's ack wherever it lands, backwards included.
-    pub(super) fn set_acked(&mut self, channel_id: ChannelId, message_id: MessageId) {
+    /// Sets a channel's ack wherever it lands, backwards included, along
+    /// with the mentions left past it.
+    pub(super) fn set_acked(
+        &mut self,
+        channel_id: ChannelId,
+        message_id: MessageId,
+        mentions: u32,
+    ) {
         self.acked.insert(channel_id, message_id);
+        self.set_mentions(channel_id, mentions);
+    }
+
+    pub(super) fn set_mentions(&mut self, channel_id: ChannelId, mentions: u32) {
+        if mentions == 0 {
+            self.mentions.remove(&channel_id);
+        } else {
+            self.mentions.insert(channel_id, mentions);
+        }
+    }
+
+    /// Counts a message that pings the user.
+    pub(super) fn note_mention(&mut self, channel_id: ChannelId) {
+        *self.mentions.entry(channel_id).or_default() += 1;
+    }
+
+    pub(super) fn mentions(&self, channel_id: ChannelId) -> u32 {
+        self.mentions.get(&channel_id).copied().unwrap_or(0)
+    }
+
+    /// A guild's mentions across its channels. Mutes don't hide them: a
+    /// muted guild still shows how often it pinged the user, as Discord's
+    /// does.
+    pub(super) fn guild_mentions(&self, guild_id: GuildId) -> u32 {
+        self.guilds.get(&guild_id).map_or(0, |guild| {
+            guild
+                .channels
+                .iter()
+                .map(|&(channel_id, _)| self.mentions(channel_id))
+                .sum()
+        })
+    }
+
+    /// Whether `@everyone` and `@here`, and role mentions, ping the user in a
+    /// guild.
+    pub(super) fn pinged_by(&self, guild_id: GuildId) -> (bool, bool) {
+        (
+            !self.suppress_everyone.contains(&guild_id),
+            !self.suppress_roles.contains(&guild_id),
+        )
     }
 
     pub(super) fn is_unread(&self, channel_id: ChannelId) -> bool {
@@ -211,6 +281,7 @@ mod tests {
         unreads.set_read_states(vec![ReadState {
             channel_id: Id::new(10),
             last_message_id: Id::new(40),
+            mention_count: 0,
         }]);
         assert!(unreads.is_unread(Id::new(10)));
         assert!(unreads.is_guild_unread(Id::new(1)));
@@ -219,8 +290,37 @@ mod tests {
         assert!(!unreads.is_unread(Id::new(10)));
         // Acks only go forward unless set outright.
         assert!(!unreads.ack(Id::new(10), Id::new(45)));
-        unreads.set_acked(Id::new(10), Id::new(45));
+        unreads.set_acked(Id::new(10), Id::new(45), 0);
         assert!(unreads.is_unread(Id::new(10)));
+    }
+
+    #[test]
+    fn mentions_count_up_until_acked() {
+        let mut unreads = Unreads::default();
+        unreads.set_guild(guild(Some(1), &[(10, None, Some(50)), (11, None, None)]));
+        unreads.set_read_states(vec![ReadState {
+            channel_id: Id::new(10),
+            last_message_id: Id::new(40),
+            mention_count: 2,
+        }]);
+        unreads.note_message(Id::new(11), Id::new(60));
+        unreads.note_mention(Id::new(11));
+        assert_eq!(unreads.guild_mentions(Id::new(1)), 3);
+
+        // Muting hides the unread mark, but not the mentions.
+        unreads.set_mutes(vec![MuteSettings {
+            guild_id: Some(Id::new(1)),
+            muted: true,
+            muted_channels: Vec::new(),
+            suppress_everyone: false,
+            suppress_roles: false,
+        }]);
+        assert!(!unreads.is_guild_unread(Id::new(1)));
+        assert_eq!(unreads.guild_mentions(Id::new(1)), 3);
+
+        unreads.ack(Id::new(10), Id::new(50));
+        assert_eq!(unreads.mentions(Id::new(10)), 0);
+        assert_eq!(unreads.guild_mentions(Id::new(1)), 1);
     }
 
     #[test]
@@ -244,6 +344,8 @@ mod tests {
             guild_id: Some(Id::new(1)),
             muted: false,
             muted_channels: vec![Id::new(5)],
+            suppress_everyone: false,
+            suppress_roles: false,
         }]);
         assert!(unreads.is_muted(Id::new(10), Some(Id::new(5))));
         assert!(!unreads.is_guild_unread(Id::new(1)));

@@ -153,6 +153,8 @@ impl HomeScreen {
                 // Discord acks a sender's own message for them.
                 if Some(incoming.message.author_id) == self.self_user_id {
                     self.unreads.ack(incoming.channel_id, incoming.message.id);
+                } else if self.pings_me(incoming.channel_id, incoming.guild_id, &incoming.message) {
+                    self.unreads.note_mention(incoming.channel_id);
                 }
                 if incoming.guild_id.is_none() {
                     self.note_dm_activity(incoming.channel_id, incoming.message.id, cx);
@@ -252,11 +254,16 @@ impl HomeScreen {
                 channel_id,
                 message_id,
                 manual,
+                mention_count,
             } => {
                 if manual {
-                    self.unreads.set_acked(channel_id, message_id);
+                    let mentions = mention_count.unwrap_or(self.unreads.mentions(channel_id));
+                    self.unreads.set_acked(channel_id, message_id, mentions);
                 } else {
                     self.unreads.ack(channel_id, message_id);
+                    if let Some(mentions) = mention_count {
+                        self.unreads.set_mentions(channel_id, mentions);
+                    }
                 }
                 cx.notify();
             }

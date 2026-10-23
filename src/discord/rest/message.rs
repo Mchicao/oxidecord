@@ -163,16 +163,18 @@ pub async fn trigger_typing(channel_id: Id<ChannelMarker>) -> Result<(), String>
 ///
 /// `manual` says the ack goes backwards, as marking a message unread does —
 /// without it, other clients may ignore an ack older than the one they hold.
-/// Discord doesn't recount the mentions past a manual ack, so it's given
-/// none. A user-client endpoint with no twilight helper.
+/// Discord doesn't recount the mentions past a manual ack, so it's told
+/// `mention_count`; a forward ack ignores it. A user-client endpoint with no
+/// twilight helper.
 pub async fn ack_message(
     channel_id: Id<ChannelMarker>,
     message_id: Id<MessageMarker>,
     manual: bool,
+    mention_count: u32,
 ) -> Result<(), String> {
     request(move |client| async move {
         let body = if manual {
-            serde_json::json!({ "token": null, "manual": true, "mention_count": 0 })
+            serde_json::json!({ "token": null, "manual": true, "mention_count": mention_count })
         } else {
             serde_json::json!({ "token": null })
         };
