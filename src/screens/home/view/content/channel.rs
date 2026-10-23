@@ -3,7 +3,8 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, separator::Separator, v_flex,
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, separator::Separator,
+    v_flex,
 };
 
 use crate::discord::Channel;
@@ -14,6 +15,10 @@ use crate::ui::theme;
 
 use super::super::markdown::MarkdownOptions;
 use super::{header, header_actions, header_content, message_list, pane};
+
+/// About the share of the pane Discord gives a voice channel's chat.
+const VOICE_CHAT_WIDTH: f32 = 400.;
+const VOICE_CHAT_HEADER_HEIGHT: f32 = 48.;
 
 impl HomeScreen {
     pub(super) fn render_channel_content(&self, cx: &Context<Self>) -> AnyElement {
@@ -27,9 +32,24 @@ impl HomeScreen {
             .min_w_0()
             .child(self.render_channel_header(&channel, cx));
 
-        // A voice channel's pane is the call itself: no history, no composer.
+        // A voice channel's pane is the call itself, with its text chat
+        // beside it when that's open.
         if channel.kind.is_voice() {
-            return pane.child(self.render_voice_stage(cx)).into_any_element();
+            return pane
+                .child(
+                    // A plain row rather than `h_flex`, which centres its
+                    // children instead of stretching them to its height.
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .child(self.render_voice_stage(cx))
+                        .when(self.voice_chat_open, |this| {
+                            this.child(self.render_voice_chat(&channel, cx))
+                        }),
+                )
+                .into_any_element();
         }
 
         // The member list runs from under the header to the bottom of the
@@ -50,6 +70,57 @@ impl HomeScreen {
                 .children(self.render_member_list(cx)),
         )
         .into_any_element()
+    }
+
+    /// A voice channel's text chat, docked to the right of its stage: its own
+    /// small header, the messages, and the composer.
+    fn render_voice_chat(&self, channel: &Channel, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .w(px(VOICE_CHAT_WIDTH))
+            .flex_shrink_0()
+            .h_full()
+            .border_l_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .h(px(VOICE_CHAT_HEADER_HEIGHT))
+                    .flex_shrink_0()
+                    .px_4()
+                    .gap_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        Icon::default()
+                            .path("icons/message-circle.svg")
+                            .size_5()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(channel.name.clone()),
+                    )
+                    .child(
+                        Button::new("close-voice-chat")
+                            .icon(IconName::Close)
+                            .ghost()
+                            .small()
+                            .tooltip("Close Chat")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.close_voice_chat(window, cx)
+                                }),
+                            ),
+                    ),
+            )
+            .child(self.render_messages(cx))
+            .child(self.render_message_bar(channel.can_send, cx))
     }
 
     fn render_channel_header(&self, channel: &Channel, cx: &Context<Self>) -> impl IntoElement {
@@ -87,6 +158,26 @@ impl HomeScreen {
                 // Pushes the controls to the right when there's no topic to
                 // fill the space.
                 .when(channel.topic.is_none(), |this| this.child(div().flex_1()))
+                .when(channel.kind.is_voice(), |this| {
+                    let open = self.voice_chat_open;
+                    this.child(
+                        header_actions().child(
+                            Button::new("toggle-voice-chat")
+                                .icon(Icon::default().path("icons/message-circle.svg"))
+                                .ghost()
+                                .small()
+                                .selected(open)
+                                .tooltip(if open { "Hide Chat" } else { "Show Chat" })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    match this.selected_channel {
+                                        Some(_) if open => this.close_voice_chat(window, cx),
+                                        Some(id) => this.open_voice_chat(id, window, cx),
+                                        None => {}
+                                    }
+                                })),
+                        ),
+                    )
+                })
                 .when(!channel.kind.is_voice(), |this| {
                     let hidden = self.member_list_hidden;
                     this.child(

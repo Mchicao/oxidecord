@@ -403,6 +403,10 @@ pub struct HomeScreen {
     /// it, which takes knowing how big it is before they're built, so a
     /// change is caught at paint and lays the stage out again.
     pub(super) voice_stage_size: Size<Pixels>,
+    /// The text chat beside a voice channel's stage is open. While it is, the
+    /// open voice channel is the conversation every message path works on.
+    /// Kept across voice channels, as Discord's is, until it's closed.
+    pub(super) voice_chat_open: bool,
     /// Sends commands up the gateway — joining and leaving voice channels is
     /// done with a gateway command, not a REST call.
     pub(super) gateway: Option<discord::GatewaySender>,
@@ -589,6 +593,7 @@ impl HomeScreen {
             watching: None,
             retired_stream_frames: Vec::new(),
             voice_stage_size: Size::default(),
+            voice_chat_open: false,
             gateway: None,
             self_user_id: None,
             shift_held: false,

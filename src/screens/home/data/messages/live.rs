@@ -312,7 +312,11 @@ impl HomeScreen {
         incoming: discord::IncomingMessage,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_channel != Some(incoming.channel_id) {
+        // Open on a voice channel with its chat closed, what's loaded is
+        // whichever conversation was open before, not this one.
+        if self.selected_channel != Some(incoming.channel_id)
+            || self.messages_channel != Some(incoming.channel_id)
+        {
             return;
         }
         // The history for this channel is still loading and will replace the

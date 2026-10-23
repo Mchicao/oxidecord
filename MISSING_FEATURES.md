@@ -110,7 +110,6 @@
 | Activities (embedded apps in voice) | Missing | |
 | Incoming call ringing and accept or decline UI | Partial | Join and Decline show in the DM's call band once it's opened; no ringtone, and no prompt anywhere else |
 | Join and leave sound effects | Missing | |
-| Voice channel text chat | Missing | |
 | Picture-in-picture and pop-out call window | Missing | |
 | Voice region override | Missing | |
 

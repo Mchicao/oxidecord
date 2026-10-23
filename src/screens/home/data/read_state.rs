@@ -25,7 +25,10 @@ impl HomeScreen {
         let Some(channel_id) = self.selected_channel else {
             return;
         };
-        if self.messages_loading
+        // A voice channel open without its chat has no conversation loaded,
+        // or still holds the one open before it.
+        if self.messages_channel != Some(channel_id)
+            || self.messages_loading
             || self.messages_error.is_some()
             || !self.at_bottom
             || !self.reached_newest

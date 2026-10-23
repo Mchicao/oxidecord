@@ -20,4 +20,5 @@ pub(super) mod read_state;
 pub(super) mod stream;
 pub(super) mod video;
 pub(super) mod voice;
+pub(super) mod voice_chat;
 pub(super) mod watch;

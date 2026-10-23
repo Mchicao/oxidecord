@@ -32,8 +32,24 @@ impl HomeScreen {
         // won't clip to.
         self.stage(call, cx)
             .flex_1()
-            .rounded_b(radius::CARD - px(1.))
+            .map(|this| self.round_stage_corners(this))
             .into_any_element()
+    }
+
+    /// Rounds the stage into the panel's bottom corners: only the left one
+    /// while the chat sits to its right.
+    ///
+    /// Also lets it shrink below its content: the tile grid is sized from the
+    /// stage's last measured width, so otherwise the stage would hold that
+    /// width and push the chat out of the pane rather than make room for it.
+    fn round_stage_corners(&self, stage: Div) -> Div {
+        let stage = stage.min_w_0();
+        let corner = radius::CARD - px(1.);
+        if self.voice_chat_open {
+            stage.rounded_bl(corner)
+        } else {
+            stage.rounded_b(corner)
+        }
     }
 
     /// The tiles and the control bar under them, shared with a DM's call
@@ -217,7 +233,7 @@ impl HomeScreen {
             .items_center()
             .justify_center()
             .bg(theme.muted.opacity(0.4))
-            .rounded_b(radius::CARD - px(1.))
+            .map(|this| self.round_stage_corners(this))
             .when(participants.is_empty(), |this| {
                 this.child(
                     Icon::default()
@@ -250,9 +266,9 @@ impl HomeScreen {
                     .icon(Icon::default().path("icons/phone.svg"))
                     .label("Join Voice")
                     .primary()
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(id) = channel_id {
-                            this.join_voice_channel(id, cx);
+                            this.join_voice_channel(id, window, cx);
                         }
                     })),
             )
