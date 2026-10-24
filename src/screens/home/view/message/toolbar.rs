@@ -17,6 +17,13 @@ use crate::screens::home::{EmojiTarget, HomeScreen, ReplyTarget};
 use crate::ui::button::Button;
 use crate::ui::depth::{self, Finish, Level, Lit as _, radius};
 
+/// Which part of a message the pointer is over, for [`HomeScreen::set_hovered`].
+#[derive(Clone, Copy)]
+pub(super) enum Hovered {
+    Message,
+    Toolbar,
+}
+
 impl HomeScreen {
     /// Sits at the top-right of the message, shown only while `group_name` —
     /// the message row's hover group — is hovered.
@@ -50,12 +57,7 @@ impl HomeScreen {
             // light up or take the pointer underneath it.
             .when(shown, |this| this.visible().occlude())
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_toolbar = Some(message_id);
-                } else if this.hovered_toolbar == Some(message_id) {
-                    this.hovered_toolbar = None;
-                }
-                cx.notify();
+                this.set_hovered(Hovered::Toolbar, message_id, *hovered, cx);
             }))
             .child(
                 h_flex()
@@ -138,6 +140,39 @@ impl HomeScreen {
             || self.hovered_toolbar == Some(message_id)
             || self.message_menu == Some(message_id)
             || self.reacting_to(message_id)
+    }
+
+    /// Records the pointer entering or leaving a message's row or toolbar.
+    /// Only a toolbar going up or down needs a redraw, which saves redrawing
+    /// the whole screen for every hover event as the pointer sweeps the list.
+    pub(super) fn set_hovered(
+        &mut self,
+        part: Hovered,
+        message_id: Id<MessageMarker>,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let slot = match part {
+            Hovered::Message => self.hovered_message,
+            Hovered::Toolbar => self.hovered_toolbar,
+        };
+        let affected = [slot, Some(message_id)];
+        let shown = |this: &Self| affected.map(|id| id.is_some_and(|id| this.toolbar_shown(id)));
+        let before = shown(self);
+
+        let slot = match part {
+            Hovered::Message => &mut self.hovered_message,
+            Hovered::Toolbar => &mut self.hovered_toolbar,
+        };
+        if hovered {
+            *slot = Some(message_id);
+        } else if *slot == Some(message_id) {
+            *slot = None;
+        }
+
+        if shown(self) != before {
+            cx.notify();
+        }
     }
 
     fn reacting_to(&self, message_id: Id<MessageMarker>) -> bool {

@@ -22,6 +22,7 @@ use crate::screens::home::{HomeScreen, View};
 
 use super::markdown::MarkdownOptions;
 use super::{GROUP_GAP, MESSAGE_PADDING_X};
+use toolbar::Hovered;
 
 /// The avatar beside a group's first message.
 const AVATAR_SIZE: f32 = 40.;
@@ -187,12 +188,7 @@ impl HomeScreen {
             .w_full()
             .min_w_0()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_message = Some(message_id);
-                } else if this.hovered_message == Some(message_id) {
-                    this.hovered_message = None;
-                }
-                cx.notify();
+                this.set_hovered(Hovered::Message, message_id, *hovered, cx);
             }))
             .map(|this| match tint {
                 // A tint stays under the pointer, only deeper, so hovering
