@@ -4,8 +4,17 @@
 //! Nothing here is essential to the app working, so every operation degrades to
 //! a default instead of failing: an unreadable or malformed file reads as "no
 //! preferences set", and a failed write is dropped.
+//!
+//! The file is read once and kept in memory, since some reads happen on every
+//! channel switch on the foreground thread. Writes go through that copy, so
+//! the file is only touched when something changes.
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::{Mutex, MutexGuard},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,14 +52,41 @@ pub enum RecentEmoji {
     Unicode(String),
 }
 
+static CACHE: Mutex<Option<Prefs>> = Mutex::new(None);
+
 pub fn load() -> Prefs {
+    cached().get_or_insert_with(read_file).clone()
+}
+
+pub fn save(prefs: &Prefs) {
+    *cached() = Some(prefs.clone());
+    write_file(prefs);
+}
+
+/// Loads, edits, and saves in one step, so a caller changing one field doesn't
+/// clear the ones it doesn't know about.
+pub fn update(edit: impl FnOnce(&mut Prefs)) {
+    let mut cache = cached();
+    let prefs = cache.get_or_insert_with(read_file);
+    edit(prefs);
+    write_file(prefs);
+}
+
+fn cached() -> MutexGuard<'static, Option<Prefs>> {
+    // A panic mid-edit leaves at worst a half-edited copy, still better than none
+    CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn read_file() -> Prefs {
     file_path()
         .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|contents| serde_json::from_str(&contents).ok())
         .unwrap_or_default()
 }
 
-pub fn save(prefs: &Prefs) {
+fn write_file(prefs: &Prefs) {
     let Some(path) = file_path() else {
         return;
     };
@@ -64,14 +100,6 @@ pub fn save(prefs: &Prefs) {
         return;
     }
     _ = fs::write(path, contents);
-}
-
-/// Loads, edits, and saves in one step, so a caller changing one field doesn't
-/// clear the ones it doesn't know about.
-pub fn update(edit: impl FnOnce(&mut Prefs)) {
-    let mut prefs = load();
-    edit(&mut prefs);
-    save(&prefs);
 }
 
 fn file_path() -> Option<PathBuf> {
