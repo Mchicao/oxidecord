@@ -9,6 +9,7 @@
 //! the count as each session starts and when it's acked; in between, the
 //! client counts the pings that arrive itself, as the official one does.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use twilight_model::id::{
@@ -31,6 +32,13 @@ struct GuildChannels {
     channels: Vec<(ChannelId, Option<ChannelId>)>,
 }
 
+/// What a guild's rail icon shows, worked out from all of its channels.
+#[derive(Clone, Copy)]
+struct GuildMark {
+    unread: bool,
+    mentions: u32,
+}
+
 #[derive(Default)]
 pub(super) struct Unreads {
     /// The last message the user has read in each channel.
@@ -50,11 +58,16 @@ pub(super) struct Unreads {
     suppress_everyone: HashSet<GuildId>,
     /// Guilds whose role pings don't count.
     suppress_roles: HashSet<GuildId>,
+    /// Each guild's mark as last worked out. The rail asks for every guild's
+    /// on every frame, and working one out walks all its channels, so it's
+    /// kept until something in the guild changes.
+    marks: RefCell<HashMap<GuildId, GuildMark>>,
 }
 
 impl Unreads {
     /// Replaces every channel's ack with a session's read states.
     pub(super) fn set_read_states(&mut self, states: Vec<ReadState>) {
+        self.marks.get_mut().clear();
         self.mentions = states
             .iter()
             .filter(|state| state.mention_count > 0)
@@ -67,6 +80,7 @@ impl Unreads {
     }
 
     pub(super) fn set_guild(&mut self, guild: GuildUnreads) {
+        self.marks.get_mut().remove(&guild.guild_id);
         if let Some(old) = self.guilds.remove(&guild.guild_id) {
             for (id, _) in old.channels {
                 self.channel_guild.remove(&id);
@@ -101,6 +115,7 @@ impl Unreads {
     }
 
     pub(super) fn set_mutes(&mut self, settings: Vec<MuteSettings>) {
+        self.marks.get_mut().clear();
         for settings in settings {
             if let Some(guild_id) = settings.guild_id {
                 for (set, on) in [
@@ -126,6 +141,14 @@ impl Unreads {
     pub(super) fn note_latest(&mut self, channel_id: ChannelId, message_id: MessageId) {
         let latest = self.latest.entry(channel_id).or_insert(message_id);
         *latest = (*latest).max(message_id);
+        self.forget_mark(channel_id);
+    }
+
+    /// Drops the mark of the guild a channel is in, after the channel changed.
+    fn forget_mark(&mut self, channel_id: ChannelId) {
+        if let Some(guild_id) = self.channel_guild.get(&channel_id) {
+            self.marks.get_mut().remove(guild_id);
+        }
     }
 
     /// Records a message arriving live. A channel with nothing to count from
@@ -172,6 +195,7 @@ impl Unreads {
         }
         self.acked.insert(channel_id, message_id);
         self.mentions.remove(&channel_id);
+        self.forget_mark(channel_id);
         true
     }
 
@@ -193,11 +217,13 @@ impl Unreads {
         } else {
             self.mentions.insert(channel_id, mentions);
         }
+        self.forget_mark(channel_id);
     }
 
     /// Counts a message that pings the user.
     pub(super) fn note_mention(&mut self, channel_id: ChannelId) {
         *self.mentions.entry(channel_id).or_default() += 1;
+        self.forget_mark(channel_id);
     }
 
     pub(super) fn mentions(&self, channel_id: ChannelId) -> u32 {
@@ -208,13 +234,7 @@ impl Unreads {
     /// muted guild still shows how often it pinged the user, as Discord's
     /// does.
     pub(super) fn guild_mentions(&self, guild_id: GuildId) -> u32 {
-        self.guilds.get(&guild_id).map_or(0, |guild| {
-            guild
-                .channels
-                .iter()
-                .map(|&(channel_id, _)| self.mentions(channel_id))
-                .sum()
-        })
+        self.mark(guild_id).mentions
     }
 
     /// Whether `@everyone` and `@here`, and role mentions, ping the user in a
@@ -244,14 +264,29 @@ impl Unreads {
     /// Whether a guild has a channel with something unread in it, leaving out
     /// what's muted — a muted guild never shows its mark at all.
     pub(super) fn is_guild_unread(&self, guild_id: GuildId) -> bool {
-        if self.muted_guilds.contains(&guild_id) {
-            return false;
+        self.mark(guild_id).unread
+    }
+
+    fn mark(&self, guild_id: GuildId) -> GuildMark {
+        if let Some(&mark) = self.marks.borrow().get(&guild_id) {
+            return mark;
         }
-        self.guilds.get(&guild_id).is_some_and(|guild| {
-            guild.channels.iter().any(|&(channel_id, parent_id)| {
-                !self.is_muted(channel_id, parent_id) && self.is_unread(channel_id)
-            })
-        })
+        let channels = self
+            .guilds
+            .get(&guild_id)
+            .map_or(&[][..], |guild| &guild.channels);
+        let mark = GuildMark {
+            unread: !self.muted_guilds.contains(&guild_id)
+                && channels.iter().any(|&(channel_id, parent_id)| {
+                    !self.is_muted(channel_id, parent_id) && self.is_unread(channel_id)
+                }),
+            mentions: channels
+                .iter()
+                .map(|&(channel_id, _)| self.mentions(channel_id))
+                .sum(),
+        };
+        self.marks.borrow_mut().insert(guild_id, mark);
+        mark
     }
 }
 
@@ -288,10 +323,12 @@ mod tests {
 
         assert!(unreads.ack(Id::new(10), Id::new(50)));
         assert!(!unreads.is_unread(Id::new(10)));
+        assert!(!unreads.is_guild_unread(Id::new(1)));
         // Acks only go forward unless set outright.
         assert!(!unreads.ack(Id::new(10), Id::new(45)));
         unreads.set_acked(Id::new(10), Id::new(45), 0);
         assert!(unreads.is_unread(Id::new(10)));
+        assert!(unreads.is_guild_unread(Id::new(1)));
     }
 
     #[test]
