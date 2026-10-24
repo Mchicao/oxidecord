@@ -168,6 +168,15 @@ impl HomeScreen {
         true
     }
 
+    pub(in crate::screens::home) fn has_pending_message(
+        &self,
+        pending_id: Id<MessageMarker>,
+    ) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.id == pending_id && message.delivery != discord::Delivery::Sent)
+    }
+
     fn pending_message_mut(
         &mut self,
         pending_id: Id<MessageMarker>,

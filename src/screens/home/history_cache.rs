@@ -83,8 +83,9 @@ impl HistoryCache {
             .map(|(_, history)| history)
     }
 
-    /// A message that arrived live in a cached conversation.
-    pub(super) fn push(&mut self, channel_id: Id<ChannelMarker>, message: Message) {
+    /// A message that arrived live in a cached conversation. It's copied only
+    /// if it's kept, since most live messages are for channels not cached.
+    pub(super) fn push(&mut self, channel_id: Id<ChannelMarker>, message: &Message) {
         let Some(history) = self.get_mut(channel_id) else {
             return;
         };
@@ -97,7 +98,7 @@ impl HistoryCache {
         {
             return;
         }
-        history.messages.push(message);
+        history.messages.push(message.clone());
         if history.messages.len() > CACHED_MESSAGES {
             history.messages.remove(0);
             history.reached_oldest = false;
@@ -115,9 +116,9 @@ impl HistoryCache {
             .find(|message| message.id == message_id)
     }
 
-    pub(super) fn edit(&mut self, channel_id: Id<ChannelMarker>, message: Message) {
+    pub(super) fn edit(&mut self, channel_id: Id<ChannelMarker>, message: &Message) {
         if let Some(cached) = self.message_mut(channel_id, message.id) {
-            cached.apply_edit(message);
+            cached.apply_edit(message.clone());
         }
     }
 

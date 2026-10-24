@@ -161,12 +161,12 @@ impl HomeScreen {
                 }
                 self.stop_typing(incoming.channel_id, incoming.message.author_id, cx);
                 self.history_cache
-                    .push(incoming.channel_id, incoming.message.clone());
+                    .push(incoming.channel_id, &incoming.message);
                 self.handle_incoming_message(incoming, cx)
             }
             discord::GatewayEvent::MessageUpdate(incoming) => {
                 self.history_cache
-                    .edit(incoming.channel_id, incoming.message.clone());
+                    .edit(incoming.channel_id, &incoming.message);
                 self.handle_message_update(incoming, cx)
             }
             discord::GatewayEvent::MessageDelete {
@@ -341,8 +341,9 @@ impl HomeScreen {
         // The echo of a message sent from here takes the place of its pending
         // copy.
         if let Some(nonce) = incoming.nonce.and_then(Id::new_checked)
-            && self.confirm_pending_message(nonce, incoming.message.clone())
+            && self.has_pending_message(nonce)
         {
+            self.confirm_pending_message(nonce, incoming.message);
             cx.notify();
             return;
         }
