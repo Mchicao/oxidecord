@@ -1,25 +1,28 @@
-//! The emoji picker opened from the composer: a search box, the emoji the user
-//! may send here grouped by guild and category, and the hovered one named
+//! The emoji picker opened from the composer, laid out as Discord's: a search
+//! box over the emoji the user may send here, grouped by guild and category
+//! with a rail of those groups down the side, and the hovered one named
 //! underneath.
 
 use std::ops::Range;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::input::{Escape, Input};
-use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::input::{Escape, Input};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
-use crate::screens::home::emoji::{COLUMNS, PickerEmoji, PickerRow};
+use crate::screens::home::emoji::{COLUMNS, PickerEmoji, PickerRow, SectionHeader, SectionKind};
 use crate::screens::home::{EmojiTarget, HomeScreen};
 use crate::ui::depth::{self, Level, radius};
 use crate::ui::tooltip;
 
 /// Each emoji's square, and every list line's height — headers included, so
 /// the list can be virtualized.
-const CELL: f32 = 40.;
-const EMOJI_SIZE: f32 = 30.;
-const LIST_HEIGHT: f32 = 360.;
+const CELL: f32 = 44.;
+const EMOJI_SIZE: f32 = 32.;
+const LIST_HEIGHT: f32 = 380.;
 const PADDING: f32 = 8.;
+const RAIL_WIDTH: f32 = 48.;
+const RAIL_ICON: f32 = 32.;
 
 impl HomeScreen {
     /// The open picker, over the whole app like the profile card: a layer that
@@ -37,7 +40,7 @@ impl HomeScreen {
             EmojiTarget::Reaction(_) => (Anchor::TopRight, point(px(-24.), px(-16.))),
         };
 
-        let list = if picker.rows.is_empty() {
+        let list = if picker.layout.rows.is_empty() {
             div()
                 .size_full()
                 .flex()
@@ -50,34 +53,44 @@ impl HomeScreen {
         } else {
             uniform_list(
                 "emoji-picker-list",
-                picker.rows.len(),
+                picker.layout.rows.len(),
                 cx.processor(|this, range: Range<usize>, _, cx| this.render_picker_rows(range, cx)),
             )
-            .track_scroll(&picker.scroll)
+            .track_scroll(picker.scroll.uniform_handle())
+            .on_scroll_wheel(cx.listener(|this, event, window, _| {
+                if let Some(picker) = &mut this.emoji_picker {
+                    picker.scroll.absorb(event, window);
+                }
+            }))
             .size_full()
             .into_any_element()
         };
 
         let footer = h_flex()
-            .h(px(44.))
-            .px_3()
+            .h(px(48.))
+            .flex_shrink_0()
+            .px_4()
             .gap_2()
             .border_t_1()
             .border_color(theme.border)
             .bg(theme.muted.opacity(0.4))
-            .text_sm()
             .map(|this| match &picker.hovered {
-                Some(emoji) => this
-                    .child(emoji_glyph(emoji, 24., self, false))
-                    .child(div().truncate().child(emoji.label())),
+                Some(emoji) => this.child(emoji_glyph(emoji, 28., self, false)).child(
+                    div()
+                        .truncate()
+                        .text_base()
+                        .font_semibold()
+                        .child(emoji.label()),
+                ),
                 None => this
+                    .text_sm()
                     .text_color(theme.muted_foreground)
                     .child("Pick an emoji"),
             });
 
         let card = v_flex()
             .occlude()
-            .w(px(CELL * COLUMNS as f32 + PADDING * 2.))
+            .w(px(RAIL_WIDTH + CELL * COLUMNS as f32 + PADDING * 2.))
             .bg(theme.popover)
             .text_color(theme.popover_foreground)
             .border_1()
@@ -91,16 +104,32 @@ impl HomeScreen {
                 this.close_emoji_picker(window, cx);
             }))
             .child(
-                div()
-                    .p(px(PADDING))
-                    .child(Input::new(&picker.search).small().cleanable(true)),
+                div().p_3().border_b_1().border_color(theme.border).child(
+                    Input::new(&picker.search)
+                        .prefix(
+                            Icon::new(IconName::Search)
+                                .size(px(16.))
+                                .text_color(theme.muted_foreground),
+                        )
+                        .cleanable(true)
+                        // It's focused whenever the picker is open, so a ring
+                        // would only ever say the picker is open.
+                        .focus_bordered(false),
+                ),
             )
             .child(
-                div()
+                h_flex()
                     .h(px(LIST_HEIGHT))
-                    .px(px(PADDING))
-                    .pb(px(PADDING))
-                    .child(list),
+                    .items_start()
+                    .children(self.render_picker_rail(cx))
+                    .child(
+                        div()
+                            .h_full()
+                            .flex_1()
+                            .min_w_0()
+                            .px(px(PADDING))
+                            .child(list),
+                    ),
             )
             .child(footer);
 
@@ -131,31 +160,79 @@ impl HomeScreen {
         )
     }
 
+    /// One icon per section down the left side, the one in view lit; a click
+    /// glides the list to that section.
+    fn render_picker_rail(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let picker = self.emoji_picker.as_ref()?;
+        let theme = cx.theme();
+        let layout = picker.layout.clone();
+        let top_row = (-f32::from(picker.scroll.offset()) / CELL).round() as usize;
+        let current = layout.section_at(top_row);
+
+        Some(
+            v_flex()
+                .id("emoji-picker-rail")
+                .w(px(RAIL_WIDTH))
+                .h_full()
+                .flex_shrink_0()
+                .items_center()
+                .py_2()
+                .gap_1()
+                .bg(theme.sidebar)
+                .overflow_y_scroll()
+                .track_scroll(&picker.rail_scroll)
+                .children(layout.sections.iter().enumerate().map(|(ix, section)| {
+                    let active = current == Some(ix);
+                    let first_row = section.first_row;
+                    div()
+                        .id(("emoji-rail", ix))
+                        .size(px(RAIL_ICON + 4.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(radius::ITEM)
+                        .cursor_pointer()
+                        .text_color(if active {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .when(active, |this| this.bg(theme.accent))
+                        .hover(|this| this.bg(theme.accent).text_color(theme.foreground))
+                        .child(section_icon(section, RAIL_ICON - 8., RAIL_ICON - 4.))
+                        .tooltip(tooltip::text(SharedString::from(section.title.clone())))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(picker) = &mut this.emoji_picker {
+                                picker.scroll.glide_to(px(-(first_row as f32) * CELL));
+                                cx.notify();
+                            }
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn render_picker_rows(
         &mut self,
         range: Range<usize>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(rows) = self.emoji_picker.as_ref().map(|picker| picker.rows.clone()) else {
+        let Some(layout) = self
+            .emoji_picker
+            .as_ref()
+            .map(|picker| picker.layout.clone())
+        else {
             return Vec::new();
         };
         let theme = cx.theme().clone();
-        rows[range.clone()]
+        layout.rows[range.clone()]
             .iter()
             .zip(range)
             .map(|(row, ix)| match row {
-                PickerRow::Header(title) => div()
-                    .h(px(CELL))
-                    .flex()
-                    .items_end()
-                    .pb_1()
-                    .px_1()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(theme.muted_foreground)
-                    .truncate()
-                    .child(title.to_uppercase())
-                    .into_any_element(),
+                PickerRow::Header(section) => {
+                    render_picker_header(&layout.sections[*section], *section, &theme, cx)
+                }
                 PickerRow::Emojis(emojis) => h_flex()
                     .h(px(CELL))
                     .children(emojis.iter().enumerate().map(|(column, emoji)| {
@@ -170,7 +247,7 @@ impl HomeScreen {
         &self,
         emoji: &PickerEmoji,
         index: usize,
-        theme: &gpui_component::Theme,
+        theme: &gpui_kit::component::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let locked = match emoji {
@@ -204,6 +281,70 @@ impl HomeScreen {
             })
             .into_any_element()
     }
+}
+
+/// A section's title line: its icon, its name, and a chevron that folds it
+/// away. The whole line is the toggle, as in Discord.
+fn render_picker_header(
+    section: &SectionHeader,
+    index: usize,
+    theme: &gpui_kit::component::Theme,
+    cx: &mut Context<HomeScreen>,
+) -> AnyElement {
+    let kind = section.kind;
+    let chevron = if section.collapsed {
+        IconName::ChevronRight
+    } else {
+        IconName::ChevronDown
+    };
+    h_flex()
+        .id(("emoji-header", index))
+        .h(px(CELL))
+        .items_end()
+        .pb_1p5()
+        .px_1()
+        .gap_1p5()
+        .text_sm()
+        .font_semibold()
+        .text_color(theme.muted_foreground)
+        .cursor_pointer()
+        .hover(|this| this.text_color(theme.foreground))
+        .child(section_icon(section, 16., 16.))
+        .child(div().truncate().child(section.title.clone()))
+        .child(Icon::new(chevron).size(px(14.)).flex_shrink_0())
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_picker_section(kind, cx)))
+        .into_any_element()
+}
+
+/// What stands for a section: the guild's icon at `avatar` size, or a line
+/// icon at `icon` size that takes the text color.
+fn section_icon(section: &SectionHeader, icon: f32, avatar: f32) -> AnyElement {
+    use emojis::Group;
+    let path = match section.kind {
+        SectionKind::Guild(_) => {
+            return super::super::avatar(section.title.clone(), section.icon.clone(), px(avatar))
+                .rounded(px(avatar / 3.))
+                .flex_shrink_0()
+                .into_any_element();
+        }
+        SectionKind::Recent => "icons/clock.svg",
+        SectionKind::Unicode(group) => match group {
+            Group::SmileysAndEmotion => "icons/smile.svg",
+            Group::PeopleAndBody => "icons/user.svg",
+            Group::AnimalsAndNature => "icons/leaf.svg",
+            Group::FoodAndDrink => "icons/coffee.svg",
+            Group::TravelAndPlaces => "icons/plane.svg",
+            Group::Activities => "icons/trophy.svg",
+            Group::Objects => "icons/lightbulb.svg",
+            Group::Symbols => "icons/heart.svg",
+            Group::Flags => "icons/flag.svg",
+        },
+    };
+    Icon::default()
+        .path(path)
+        .size(px(icon))
+        .flex_shrink_0()
+        .into_any_element()
 }
 
 /// The emoji itself at `size`: a glyph for unicode, the CDN image for custom.

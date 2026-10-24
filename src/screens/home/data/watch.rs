@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use gpui::*;
+use gpui_kit::*;
 use image::{Frame, ImageBuffer};
 use twilight_model::id::{Id, marker::UserMarker};
 

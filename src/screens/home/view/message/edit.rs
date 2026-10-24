@@ -1,9 +1,9 @@
 //! The inline edit box that takes a message's text's place while it's being
 //! edited, with Discord's "escape to cancel • enter to save" hint under it.
 
-use gpui::*;
-use gpui_component::input::{self, Textarea};
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::input::{self, Textarea};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::*;
 
 use crate::screens::home::view::composer::surface;
 use crate::screens::home::{EDIT_CONTEXT, EditingMessage, HomeScreen, SaveEdit};

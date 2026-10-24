@@ -10,9 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState, TextareaState};
-use gpui_component::slider::SliderState;
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::slider::SliderState;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
@@ -26,7 +26,7 @@ use crate::ui::smooth_scroll::SmoothScroll;
 use super::autocomplete::{Suggestion, Trigger};
 use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
-use super::emoji::PickerRow;
+use super::emoji::{PickerLayout, SectionKind};
 use super::folders::RailEntry;
 use super::history_cache::HistoryCache;
 use super::unread::Unreads;
@@ -146,10 +146,14 @@ pub(super) struct EmojiPicker {
     /// The list as last laid out. Rebuilt when the search changes rather than
     /// every frame — the screen repaints for every video frame, and this is a
     /// couple of thousand emoji.
-    pub rows: Rc<Vec<PickerRow>>,
+    pub layout: Rc<PickerLayout>,
+    /// Sections folded down to their header, by the chevron beside it.
+    pub collapsed: HashSet<SectionKind>,
     /// The emoji under the pointer, named in the footer.
     pub hovered: Option<super::emoji::PickerEmoji>,
-    pub scroll: UniformListScrollHandle,
+    pub scroll: SmoothScroll,
+    /// The category rail down the picker's left side.
+    pub rail_scroll: ScrollHandle,
     pub _search_changed: Subscription,
 }
 
@@ -257,6 +261,19 @@ pub(super) struct VideoPlayback {
     pub scrubber: Entity<SliderState>,
 }
 
+/// The message list, drawn as a view of its own so the window can replay it
+/// from the last frame. It redraws whenever the screen is notified, as it
+/// would inline, but not when something animating in a view of its own (the
+/// typing dots) redraws around it — which would otherwise rebuild every
+/// visible message each frame.
+pub(super) struct MessageListView {
+    pub(super) screen: WeakEntity<HomeScreen>,
+}
+
+/// The typing indicator's pulsing dots. A view of their own, since an
+/// animation redraws the view it's drawn in on every frame.
+pub(super) struct TypingDots;
+
 pub struct HomeScreen {
     pub(super) view: View,
     pub(super) guilds: Vec<Guild>,
@@ -281,7 +298,11 @@ pub struct HomeScreen {
     pub(super) selected_guild: Option<Id<GuildMarker>>,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
+    /// Set through `set_channel_groups`, which keeps `channel_index` in step.
     pub(super) channel_groups: Vec<ChannelGroup>,
+    /// Where each of `channel_groups`' channels sits in it, as (group,
+    /// channel) indices: channels are looked up by id for every message drawn.
+    pub(super) channel_index: HashMap<Id<ChannelMarker>, (usize, usize)>,
     /// Every guild's channels as far as they're known: from the gateway,
     /// which sends them all with `READY`, or from a fetch where it hasn't
     /// yet. Opening a guild draws its list from here at once.
@@ -403,6 +424,10 @@ pub struct HomeScreen {
     /// it, which takes knowing how big it is before they're built, so a
     /// change is caught at paint and lays the stage out again.
     pub(super) voice_stage_size: Size<Pixels>,
+    /// The text chat beside a voice channel's stage is open. While it is, the
+    /// open voice channel is the conversation every message path works on.
+    /// Kept across voice channels, as Discord's is, until it's closed.
+    pub(super) voice_chat_open: bool,
     /// Sends commands up the gateway — joining and leaving voice channels is
     /// done with a gateway command, not a REST call.
     pub(super) gateway: Option<discord::GatewaySender>,
@@ -476,6 +501,8 @@ pub struct HomeScreen {
     pub(super) member_searches: HashSet<(Id<GuildMarker>, String)>,
     pub(super) _composer_changed: Subscription,
     pub(super) messages_list: ListState,
+    pub(super) message_list_view: Entity<MessageListView>,
+    pub(super) typing_dots: Entity<TypingDots>,
     pub(super) video: Option<VideoPlayback>,
     /// Owns the decoded bitmaps for the currently displayed messages' images.
     /// Cleared on channel switch so image memory doesn't grow without bound.
@@ -528,6 +555,15 @@ impl HomeScreen {
             });
         });
 
+        let screen = cx.entity();
+        let message_list_view = cx.new(|cx| {
+            cx.observe(&screen, |_, _, cx| cx.notify()).detach();
+            MessageListView {
+                screen: screen.downgrade(),
+            }
+        });
+        let typing_dots = cx.new(|_| TypingDots);
+
         let mut this = Self {
             view: View::Guild,
             guilds: Vec::new(),
@@ -541,6 +577,7 @@ impl HomeScreen {
             loading: true,
             error: None,
             channel_groups: Vec::new(),
+            channel_index: HashMap::new(),
             guild_channels: HashMap::new(),
             stale_guild_channels: HashSet::new(),
             fetching_guild_channels: HashSet::new(),
@@ -589,6 +626,7 @@ impl HomeScreen {
             watching: None,
             retired_stream_frames: Vec::new(),
             voice_stage_size: Size::default(),
+            voice_chat_open: false,
             gateway: None,
             self_user_id: None,
             shift_held: false,
@@ -621,6 +659,8 @@ impl HomeScreen {
             _composer_changed: composer_changed,
             messages_scroll: SmoothScroll::list(messages_list.clone()),
             messages_list,
+            message_list_view,
+            typing_dots,
             image_cache: RetainAllImageCache::new(cx),
             rail_scroll: SmoothScroll::div(),
             sidebar_scroll: SmoothScroll::div(),

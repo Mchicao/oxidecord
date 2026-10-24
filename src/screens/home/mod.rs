@@ -18,7 +18,7 @@ mod unread;
 mod view;
 mod voice;
 
-use gpui::{EventEmitter, actions};
+use gpui_kit::{EventEmitter, actions};
 
 pub use state::HomeScreen;
 
@@ -28,6 +28,9 @@ pub use state::HomeScreen;
 pub struct SessionEnded;
 
 impl EventEmitter<SessionEnded> for HomeScreen {}
+
+/// Key context of the whole screen, where escape reads the conversation.
+pub const HOME_CONTEXT: &str = "HomeScreen";
 
 /// Key context of the inline edit box, which rebinds enter to save.
 pub const EDIT_CONTEXT: &str = "MessageEdit";

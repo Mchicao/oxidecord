@@ -8,8 +8,8 @@
 
 use std::collections::HashSet;
 
-use gpui::*;
-use gpui_component::input::Escape;
+use gpui_kit::component::input::Escape;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{EmojiMarker, GuildMarker, UserMarker},

@@ -4,10 +4,10 @@ mod webview;
 
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 // Token login is hidden for now; its imports come back with it.
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _,
     // input::{Input, InputState},
     // tab::{Tab, TabBar},
@@ -137,7 +137,7 @@ impl LoginScreen {
                         cx.open_window(webview_options, move |window, cx| {
                             let webview_view =
                                 cx.new(|cx| LoginWebview::new(app, main_window, window, cx));
-                            cx.new(|cx| gpui_component::Root::new(webview_view, window, cx))
+                            cx.new(|cx| gpui_kit::component::Root::new(webview_view, window, cx))
                         })
                         .expect("Failed to open webview window");
                     }),

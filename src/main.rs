@@ -11,13 +11,13 @@ mod voice;
 
 use std::sync::Arc;
 
-use gpui::*;
-use gpui_component::{Root, input};
+use gpui_kit::component::{Root, input};
+use gpui_kit::*;
 
 use crate::screens::app::AppScreen;
 use crate::screens::home::{
     AutocompleteAccept, AutocompleteNext, AutocompletePrevious, COMPOSER_CONTEXT, EDIT_CONTEXT,
-    EditLastMessage, MarkConversationRead, PasteAttachment, SaveEdit, SendMessage,
+    EditLastMessage, HOME_CONTEXT, MarkConversationRead, PasteAttachment, SaveEdit, SendMessage,
 };
 
 fn main() {
@@ -32,12 +32,12 @@ fn main() {
     unsafe {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
-    let app = gpui_platform::application()
+    let app = gpui_kit::platform::application()
         .with_assets(assets::Assets)
         .with_http_client(Arc::new(platform::http::ReqwestClient::new()));
 
     app.run(|cx: &mut App| {
-        gpui_component::init(cx);
+        gpui_kit::component::init(cx);
         ui::theme::init(cx);
         platform::updater::init(cx);
 
@@ -50,7 +50,7 @@ fn main() {
         ]);
 
         // These share the input's own context depth, where a later binding
-        // wins, so they have to be bound after `gpui_component::init`. In both
+        // wins, so they have to be bound after `gpui_kit::component::init`. In both
         // the composer and the edit box, enter sends and shift-enter is handed
         // the input's own enter, which starts a new line, as in Discord.
         let edit_input = format!("{EDIT_CONTEXT} > Input");
@@ -80,9 +80,10 @@ fn main() {
             KeyBinding::new("up", AutocompletePrevious, Some(&composer_input)),
             KeyBinding::new("down", AutocompleteNext, Some(&composer_input)),
             KeyBinding::new("tab", AutocompleteAccept, Some(&composer_input)),
-            // No context, so anything that binds escape itself — an input, a
-            // dialog, a menu — takes it first.
-            KeyBinding::new("escape", MarkConversationRead, None),
+            // In the screen's own context, so anything inside it that binds
+            // escape — an input, a menu — takes it first. Bound with no
+            // context it would count as the deepest binding and beat them.
+            KeyBinding::new("escape", MarkConversationRead, Some(HOME_CONTEXT)),
         ]);
 
         let options = WindowOptions {

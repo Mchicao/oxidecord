@@ -43,7 +43,6 @@
 | Media channels | Missing | |
 | Stage channels (speakers, audience, raising a hand) | Partial | Joined as a plain voice channel |
 | Announcement channel follow and publish | Missing | Listed and readable only |
-| Mention badges on servers, channels and DMs | Missing | |
 | Server and channel notification settings (all, mentions, nothing, suppress `@everyone`) | Missing | |
 | Muting servers, channels and DMs | Missing | |
 | Member list sidebar with roles, presence and grouping | Partial | Guild text and announcement channels only; group DMs and threads show none, and right-clicking a member does nothing |
@@ -110,7 +109,6 @@
 | Activities (embedded apps in voice) | Missing | |
 | Incoming call ringing and accept or decline UI | Partial | Join and Decline show in the DM's call band once it's opened; no ringtone, and no prompt anywhere else |
 | Join and leave sound effects | Missing | |
-| Voice channel text chat | Missing | |
 | Picture-in-picture and pop-out call window | Missing | |
 | Voice region override | Missing | |
 

@@ -5,18 +5,21 @@
 //! emoji; with it, animated ones and every guild's, the latter only where the
 //! channel grants `USE_EXTERNAL_EMOJIS`. Unicode emoji are always free.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::GuildMarker};
 
 use crate::discord::{self, GuildEmoji};
 use crate::platform::prefs::{self, RecentEmoji};
 use crate::screens::home::emoji::{
-    PickerEmoji, PickerSection, RECENT_LIMIT, emoji_names, picker_rows, resolve_custom_emoji,
+    PickerEmoji, PickerSection, RECENT_LIMIT, SectionKind, emoji_names, picker_rows,
+    resolve_custom_emoji,
 };
 use crate::screens::home::{EmojiPicker, EmojiTarget, HomeScreen, View};
+use crate::ui::smooth_scroll::SmoothScroll;
 
 /// Whether a custom emoji can be sent in the open conversation.
 enum Access {
@@ -51,9 +54,11 @@ impl HomeScreen {
             target,
             search,
             recent,
-            rows: Rc::default(),
+            layout: Rc::default(),
+            collapsed: HashSet::new(),
             hovered: None,
-            scroll: UniformListScrollHandle::new(),
+            scroll: SmoothScroll::uniform_list(),
+            rail_scroll: ScrollHandle::new(),
             _search_changed: search_changed,
         });
         self.refresh_emoji_picker(cx);
@@ -71,17 +76,42 @@ impl HomeScreen {
         }
     }
 
-    /// Lays the picker's list out again for the current search.
+    /// Lays the picker's list out again for the current search, from the top.
     fn refresh_emoji_picker(&mut self, cx: &mut Context<Self>) {
+        self.relayout_emoji_picker(cx);
+        if let Some(picker) = &mut self.emoji_picker {
+            picker.hovered = None;
+            picker.scroll.jump_to(px(0.));
+        }
+    }
+
+    fn relayout_emoji_picker(&mut self, cx: &mut Context<Self>) {
         let custom = self.custom_emoji_sections();
         let Some(picker) = &mut self.emoji_picker else {
             return;
         };
         let query = picker.search.read(cx).value();
-        picker.rows = Rc::new(picker_rows(picker.recent.clone(), custom, &query));
-        picker.hovered = None;
-        picker.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        picker.layout = Rc::new(picker_rows(
+            picker.recent.clone(),
+            custom,
+            &query,
+            &picker.collapsed,
+        ));
         cx.notify();
+    }
+
+    /// Folds a section of the picker down to its header, or opens it again.
+    pub(in crate::screens::home) fn toggle_picker_section(
+        &mut self,
+        kind: SectionKind,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(picker) = &mut self.emoji_picker
+            && !picker.collapsed.remove(&kind)
+        {
+            picker.collapsed.insert(kind);
+        }
+        self.relayout_emoji_picker(cx);
     }
 
     /// Puts the chosen emoji into the composer at the cursor, or reacts with it.
@@ -249,7 +279,9 @@ impl HomeScreen {
                     .collect();
                 let guild = self.guilds.iter().find(|guild| guild.id == guild_id)?;
                 (!emojis.is_empty()).then(|| PickerSection {
+                    kind: SectionKind::Guild(guild_id),
                     title: guild.name.clone(),
+                    icon: guild.icon_url.clone(),
                     emojis,
                 })
             })

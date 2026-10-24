@@ -11,11 +11,11 @@ mod sidebar;
 mod user_panel;
 mod voice;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
-use super::{HomeScreen, MarkConversationRead, View};
+use super::{HOME_CONTEXT, HomeScreen, MarkConversationRead, View};
 use crate::ui::depth;
 
 const MESSAGE_PADDING_X: f32 = 16.;
@@ -34,6 +34,9 @@ impl Render for HomeScreen {
             &mut self.messages_scroll,
         ] {
             scroll.step(window);
+        }
+        if let Some(picker) = &mut self.emoji_picker {
+            picker.scroll.step(window);
         }
         // After the glide's step, so it reads where this frame draws the list.
         self.sync_at_bottom(cx);
@@ -76,6 +79,7 @@ impl Render for HomeScreen {
             // The rail and sidebar sit straight on the window; the conversation
             // is a panel lifted off it (see `inset`).
             .bg(cx.theme().sidebar)
+            .key_context(HOME_CONTEXT)
             .on_action(cx.listener(Self::on_paste_attachment))
             .on_action(cx.listener(Self::on_edit_last_message))
             .on_action(cx.listener(|this, _: &MarkConversationRead, window, cx| {
@@ -167,4 +171,34 @@ fn unread_pill(inset: Pixels, cx: &App) -> Div {
                 .rounded_r(px(4.))
                 .bg(cx.theme().foreground),
         )
+}
+
+/// The red count Discord puts on whatever has unread messages pinging the
+/// user. gpui-component's `Badge` only sits in a corner, without the ring that
+/// cuts it out of an icon, so this is drawn by hand. `None` with no mentions.
+fn mention_badge(count: u32, cx: &App) -> Option<Div> {
+    if count == 0 {
+        return None;
+    }
+    let theme = cx.theme();
+    let label = if count > 99 {
+        "99+".to_owned()
+    } else {
+        count.to_string()
+    };
+    Some(
+        h_flex()
+            .flex_shrink_0()
+            .justify_center()
+            .min_w(px(16.))
+            .h(px(16.))
+            .px(px(4.))
+            .rounded_full()
+            .bg(theme.danger)
+            .text_color(theme.danger_foreground)
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .font_weight(FontWeight::BOLD)
+            .child(label),
+    )
 }

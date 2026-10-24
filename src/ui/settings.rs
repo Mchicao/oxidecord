@@ -9,15 +9,15 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, ThemeConfig, WindowExt as _,
     group_box::GroupBoxVariant,
     h_flex,
     input::{InputEvent, InputState},
     setting::{RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::platform::updater::{self, Status};
 use crate::ui::button::Button;

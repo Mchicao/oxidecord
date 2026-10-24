@@ -1,7 +1,7 @@
 # Oxidecord
 
-A cross-platform native Discord client in Rust, built on [gpui](https://crates.io/crates/gpui)
-and [gpui-component](https://crates.io/crates/gpui-component), talking to Discord through
+A cross-platform native Discord client in Rust, built on [gpui-kit](https://crates.io/crates/gpui-kit)
+(gpui plus gpui-component, reached as `gpui_kit::*` and `gpui_kit::component`), talking to Discord through
 [twilight](https://github.com/twilight-rs/twilight) (patched to a fork that allows user tokens).
 
 ## Discord API reference
@@ -110,6 +110,8 @@ sends the UI back to the poster card and its "open externally" action.
 
 ## UI work
 
-Use the `gpui-component` skill (`.claude/skills/`) when building UI — component APIs and the
-style guide live there. Prefer existing gpui-component widgets over hand-rolled elements, and
+Use the `gpui-kit` skill (`.claude/skills/`) when building UI — component APIs and the coding
+guides live there — and `gpui-kit-design-guides` for layout, spacing and copy. The skills track
+gpui-kit's `main` branch, so check a signature against the pinned crate's source before relying
+on it. Prefer existing gpui-component widgets over hand-rolled elements, and
 theme colors (`cx.theme()`) over literals.

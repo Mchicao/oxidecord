@@ -1,12 +1,12 @@
 //! A message's menu of actions, opened from its toolbar's "More" button or by
 //! right-clicking the message.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName,
     menu::{PopupMenu, PopupMenuItem},
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
@@ -161,29 +161,40 @@ impl HomeScreen {
     pub(super) fn message_context_menu(
         &self,
         row: Stateful<Div>,
-        menu: MessageMenu,
+        message_id: Id<MessageMarker>,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        use gpui_component::menu::ContextMenuExt as _;
+        use gpui_kit::component::menu::ContextMenuExt as _;
 
         let screen = cx.entity().downgrade();
         row.context_menu(move |popup, _, cx| {
-            let message_id = menu.message_id;
-            if let Some(screen) = screen.upgrade() {
-                screen.update(cx, |this, cx| {
-                    this.message_menu = Some(message_id);
-                    cx.notify();
+            // Decided when the menu opens rather than as every row renders,
+            // which also catches anything that changed since.
+            let Some(entity) = screen.upgrade() else {
+                return popup;
+            };
+            let this = entity.read(cx);
+            let Some(menu) = this
+                .messages
+                .iter()
+                .find(|message| message.id == message_id)
+                .map(|message| MessageMenu::new(this, message))
+            else {
+                return popup;
+            };
+            entity.update(cx, |this, cx| {
+                this.message_menu = Some(message_id);
+                cx.notify();
+            });
+            cx.subscribe_self(move |_, _: &DismissEvent, cx| {
+                entity.update(cx, |this, cx| {
+                    if this.message_menu == Some(message_id) {
+                        this.message_menu = None;
+                        cx.notify();
+                    }
                 });
-                cx.subscribe_self(move |_, _: &DismissEvent, cx| {
-                    screen.update(cx, |this, cx| {
-                        if this.message_menu == Some(message_id) {
-                            this.message_menu = None;
-                            cx.notify();
-                        }
-                    });
-                })
-                .detach();
-            }
+            })
+            .detach();
             menu.build(popup, true, screen.clone(), cx)
         })
     }

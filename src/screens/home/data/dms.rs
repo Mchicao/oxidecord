@@ -1,6 +1,6 @@
 //! Loading the direct-message list and switching the sidebar over to it.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker},

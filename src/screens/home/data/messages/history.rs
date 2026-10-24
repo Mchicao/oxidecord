@@ -1,7 +1,7 @@
 //! Opening a conversation, at the first unread message when there is one, and
 //! paging through its history either way from there.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, MessageMarker},
@@ -38,7 +38,11 @@ impl HomeScreen {
         self.load_messages(window, cx);
     }
 
-    fn load_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::screens::home) fn load_messages(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(channel_id) = self.selected_channel else {
             return;
         };
@@ -46,9 +50,14 @@ impl HomeScreen {
             View::DirectMessages => self
                 .selected_dm_info()
                 .map(|dm| format!("Message @{}", dm.name)),
-            View::Guild => self
-                .selected_channel_info()
-                .map(|channel| format!("Message #{}", channel.name)),
+            // A voice channel's chat goes without the hash, as in Discord.
+            View::Guild => self.selected_channel_info().map(|channel| {
+                if channel.kind.is_voice() {
+                    format!("Message {}", channel.name)
+                } else {
+                    format!("Message #{}", channel.name)
+                }
+            }),
         };
         // Where the user had read up to, taken before opening acks it.
         let marker = self

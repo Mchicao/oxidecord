@@ -24,7 +24,7 @@ use std::{
 };
 
 use futures::{StreamExt as _, channel::mpsc};
-use gpui::{App, Global, SharedString};
+use gpui_kit::{App, Global, SharedString};
 use sha2::{Digest as _, Sha256};
 
 use super::{http, runtime};

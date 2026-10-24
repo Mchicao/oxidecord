@@ -1,6 +1,6 @@
 //! The main window's router.
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::screens::home::{HomeScreen, SessionEnded};

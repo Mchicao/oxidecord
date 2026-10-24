@@ -1,8 +1,8 @@
 //! The Discord login window: a webview that reports the token back once
 //! Discord's own page stores it.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use gpui_wry::WebView;
 use wry::WebViewBuilder;
 
@@ -72,7 +72,7 @@ impl LoginWebview {
 
             // The webview has to be built on the main thread, inside the
             // window's context.
-            let result = gpui::AsyncApp::update(cx, |cx| {
+            let result = gpui_kit::AsyncApp::update(cx, |cx| {
                 cx.update_window(window_handle, |_, window, cx| {
                     let window_handle_capture = window.window_handle();
                     let async_cx_capture = cx.to_async();

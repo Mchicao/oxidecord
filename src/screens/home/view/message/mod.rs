@@ -11,9 +11,9 @@ mod reactors;
 mod reply;
 mod toolbar;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::screens::home::state::MediaKey;
@@ -22,6 +22,7 @@ use crate::screens::home::{HomeScreen, View};
 
 use super::markdown::MarkdownOptions;
 use super::{GROUP_GAP, MESSAGE_PADDING_X};
+use toolbar::Hovered;
 
 /// The avatar beside a group's first message.
 const AVATAR_SIZE: f32 = 40.;
@@ -167,42 +168,44 @@ impl HomeScreen {
         // the floating action toolbar, like Discord. Using the toolbar counts
         // as hovering, though it hangs over the row above.
         let message_id = message.id;
-        let group_name = SharedString::from(format!("message-{}", message_id.get()));
-        let mention_tint = theme.warning;
+        // The message being replied to wears the reply's color over any
+        // mention tint, as in Discord, so it's clear what the reply is for.
+        let replying = self
+            .replying_to
+            .as_ref()
+            .is_some_and(|target| target.message_id == message_id);
+        let tint = if replying {
+            Some(theme.primary)
+        } else {
+            mentioned.then_some(theme.warning)
+        };
         let lit = self.toolbar_shown(message_id);
         let row = div()
             .id(("message", message_id.get()))
-            .group(group_name.clone())
             .relative()
             .w_full()
             .min_w_0()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_message = Some(message_id);
-                } else if this.hovered_message == Some(message_id) {
-                    this.hovered_message = None;
-                }
-                cx.notify();
+                this.set_hovered(Hovered::Message, message_id, *hovered, cx);
             }))
-            .map(|this| {
-                if mentioned {
-                    // A mention keeps its tint under the pointer, only deeper,
-                    // so hovering doesn't hide which messages were for you.
-                    this.bg(mention_tint.opacity(if lit { 0.16 } else { 0.1 }))
-                        .hover(|this| this.bg(mention_tint.opacity(0.16)))
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left_0()
-                                .w(px(MENTION_BAR_WIDTH))
-                                .bg(mention_tint),
-                        )
-                } else {
-                    this.when(lit, |this| this.bg(theme.accent.opacity(0.4)))
-                        .hover(|this| this.bg(theme.accent.opacity(0.4)))
-                }
+            .map(|this| match tint {
+                // A tint stays under the pointer, only deeper, so hovering
+                // doesn't hide which messages were for you.
+                Some(tint) => this
+                    .bg(tint.opacity(if lit { 0.16 } else { 0.1 }))
+                    .hover(|this| this.bg(tint.opacity(0.16)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(MENTION_BAR_WIDTH))
+                            .bg(tint),
+                    ),
+                None => this
+                    .when(lit, |this| this.bg(theme.accent.opacity(0.4)))
+                    .hover(|this| this.bg(theme.accent.opacity(0.4))),
             })
             // A message open for editing stays lit while the pointer is
             // elsewhere, so it's clear which one the box belongs to.
@@ -218,10 +221,14 @@ impl HomeScreen {
             })
             .child(inner);
         // Nothing on the toolbar or the menu applies until the server knows
-        // the message.
+        // the message. The toolbar is only built for the message it's up on:
+        // hidden on every other row, it would be dozens of elements apiece
+        // thrown away each frame.
         let row = if message.delivery == discord::Delivery::Sent {
-            let row = row.child(self.render_message_toolbar(message, &group_name, cx));
-            self.message_context_menu(row, menu::MessageMenu::new(self, message), cx)
+            let row = row.when(lit, |row| {
+                row.child(self.render_message_toolbar(message, cx))
+            });
+            self.message_context_menu(row, message_id, cx)
                 .into_any_element()
         } else {
             row.into_any_element()
@@ -284,16 +291,9 @@ impl HomeScreen {
         }
         // Role mentions only exist in guilds, and the open guild is the
         // message's own.
-        let roles = self
-            .selected_guild
+        self.selected_guild
             .filter(|_| self.view == View::Guild)
-            .and_then(|guild_id| self.self_roles(guild_id));
-        roles.is_some_and(|roles| {
-            message
-                .mention_roles
-                .iter()
-                .any(|role| roles.contains(role))
-        })
+            .is_some_and(|guild_id| self.mentions_self_role(message, guild_id))
     }
 
     /// The first message of an author group: the avatar, name, and timestamp

@@ -1,7 +1,7 @@
 //! Loading the signed-in user, their guilds, and a guild's channels, and
 //! logging them out.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker},
@@ -9,7 +9,7 @@ use twilight_model::id::{
 
 use crate::discord::{self, Channel};
 use crate::platform::prefs;
-use crate::screens::home::channels::build_channel_groups;
+use crate::screens::home::channels::{ChannelGroup, build_channel_groups};
 use crate::screens::home::folders::build_rail_entries;
 use crate::screens::home::{HomeScreen, SessionEnded, View};
 
@@ -127,7 +127,7 @@ impl HomeScreen {
             return;
         }
         self.selected_guild = Some(guild_id);
-        self.channel_groups.clear();
+        self.set_channel_groups(Vec::new());
         self.selected_channel = None;
         self.load_collapsed_categories();
         self.channels_error = None;
@@ -135,7 +135,7 @@ impl HomeScreen {
 
         match self.guild_channels.get(&guild_id).cloned() {
             Some(channels) => {
-                self.channel_groups = build_channel_groups(channels);
+                self.set_channel_groups(build_channel_groups(channels));
                 self.open_guild_channel(window, cx);
                 if self.stale_guild_channels.contains(&guild_id) {
                     self.fetch_guild_channels(guild_id, window, cx);
@@ -210,7 +210,7 @@ impl HomeScreen {
         self.stale_guild_channels.remove(&guild_id);
         let open = self.view == View::Guild && self.selected_guild == Some(guild_id);
         if open {
-            self.channel_groups = build_channel_groups(channels.clone());
+            self.set_channel_groups(build_channel_groups(channels.clone()));
         }
         self.guild_channels.insert(guild_id, channels);
         if !open {
@@ -310,10 +310,23 @@ impl HomeScreen {
     }
 
     pub(in crate::screens::home) fn channel_info(&self, id: Id<ChannelMarker>) -> Option<&Channel> {
-        self.channel_groups
+        let &(group, channel) = self.channel_index.get(&id)?;
+        self.channel_groups.get(group)?.channels.get(channel)
+    }
+
+    fn set_channel_groups(&mut self, groups: Vec<ChannelGroup>) {
+        self.channel_index = groups
             .iter()
-            .flat_map(|group| &group.channels)
-            .find(|channel| channel.id == id)
+            .enumerate()
+            .flat_map(|(group_ix, group)| {
+                group
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .map(move |(channel_ix, channel)| (channel.id, (group_ix, channel_ix)))
+            })
+            .collect();
+        self.channel_groups = groups;
     }
 
     /// The first text channel in display order, used as the default selection

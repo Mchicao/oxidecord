@@ -1,13 +1,14 @@
 //! The scrolling message list, and the skeleton shown in its place while a
 //! conversation loads.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, h_flex, skeleton::Skeleton, spinner::Spinner, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
+use crate::screens::home::state::MessageListView;
 use crate::ui::button::Button;
 use crate::ui::depth::{self, Finish, Level, Lit as _, radius};
 
@@ -69,6 +70,20 @@ pub(super) fn skeleton() -> impl IntoElement {
         }))
 }
 
+impl Render for MessageListView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(screen) = self.screen.upgrade() else {
+            return div().into_any_element();
+        };
+        let state = screen.read(cx).messages_list.clone();
+        list(state, move |ix, _window, cx| {
+            screen.update(cx, |this, cx| this.render_message_item(ix, cx))
+        })
+        .size_full()
+        .into_any_element()
+    }
+}
+
 impl HomeScreen {
     pub(super) fn render_messages(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
@@ -88,11 +103,8 @@ impl HomeScreen {
                 .into_any_element();
         }
 
-        let entity = cx.entity();
-        let messages_list = list(self.messages_list.clone(), move |ix, _window, cx| {
-            entity.update(cx, |this, cx| this.render_message_item(ix, cx))
-        })
-        .flex_1();
+        let messages_list = AnyView::from(self.message_list_view.clone())
+            .cached(StyleRefinement::default().flex_1());
 
         // The vertical padding sits on the container, not on the list: `list`
         // counts its own padding when it clamps a scroll offset but not when it

@@ -1,8 +1,10 @@
 //! The card itself: banner, avatar, identity line, and the details box.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex, separator::Separator, skeleton::Skeleton, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, h_flex, separator::Separator, skeleton::Skeleton, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord::UserProfile;
 use crate::screens::home::view::avatar;

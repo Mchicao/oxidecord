@@ -2,29 +2,18 @@
 
 use std::time::Duration;
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
+use crate::screens::home::state::TypingDots;
 
-impl HomeScreen {
-    /// Floats over the bottom of the conversation rather than taking a row of
-    /// its own, so the message bar doesn't grow and shrink as people start and
-    /// stop typing.
-    pub(super) fn render_typing_indicator(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let names = self.typing_names()?;
-        let theme = cx.theme();
-
-        let name = |name: String| {
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(name)
-        };
+impl Render for TypingDots {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Discord's pulsing dots: each one swells and brightens in turn, a
         // fifth of the cycle behind the one before it.
-        let foreground = theme.foreground;
-        let dots = h_flex().gap(px(3.)).children((0..3usize).map(|i| {
+        let foreground = cx.theme().foreground;
+        h_flex().gap(px(3.)).children((0..3usize).map(|i| {
             // Each dot grows inside a slot sized for its largest, since gpui
             // can't scale a div without relayout: a bare growing dot would
             // shove its neighbours and the text along every pulse.
@@ -49,7 +38,24 @@ impl HomeScreen {
                             .bg(foreground.opacity(0.35 + pulse * 0.65))
                     },
                 ))
-        }));
+        }))
+    }
+}
+
+impl HomeScreen {
+    /// Floats over the bottom of the conversation rather than taking a row of
+    /// its own, so the message bar doesn't grow and shrink as people start and
+    /// stop typing.
+    pub(super) fn render_typing_indicator(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let names = self.typing_names()?;
+        let theme = cx.theme();
+
+        let name = |name: String| {
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(name)
+        };
         let mut line = h_flex()
             .gap_1()
             .text_xs()
@@ -84,7 +90,7 @@ impl HomeScreen {
                 // Masks the messages it sits over.
                 .bg(theme.background)
                 .gap_2()
-                .child(dots)
+                .child(self.typing_dots.clone())
                 .child(line)
                 .into_any_element(),
         )

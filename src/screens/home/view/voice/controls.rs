@@ -1,11 +1,11 @@
 //! The control bar under the stage, and the microphone picker behind the
 //! mute buttons.
 
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     Disableable as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
     menu::{ContextMenuExt as _, PopupMenuItem},
 };
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 use crate::ui::button::Button;

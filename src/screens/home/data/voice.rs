@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
@@ -32,6 +32,7 @@ impl HomeScreen {
     pub(in crate::screens::home) fn join_voice_channel(
         &mut self,
         channel_id: Id<ChannelMarker>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.in_voice_channel(channel_id) {
@@ -64,7 +65,7 @@ impl HomeScreen {
             cx,
         );
         // Opening the channel puts its stage in the content pane.
-        self.selected_channel = Some(channel_id);
+        self.show_voice_channel(channel_id, window, cx);
     }
 
     /// Places a call in the open DM conversation, or joins the one already
@@ -315,9 +316,12 @@ impl HomeScreen {
         // it with the move.
         self.screen_share = None;
         // Follow the move on screen only if the old channel was the one open;
-        // someone reading a text channel stays where they are.
+        // someone reading a text channel stays where they are. The chat beside
+        // the stage was the old channel's, and there's no window here to load
+        // the new one's, so it closes.
         if self.selected_channel == previous {
             self.selected_channel = Some(channel_id);
+            self.voice_chat_open = false;
         }
     }
 

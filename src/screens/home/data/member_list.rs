@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::discord::{self, ChannelKind, MemberListItem, MemberListOp};
 use crate::platform::prefs;

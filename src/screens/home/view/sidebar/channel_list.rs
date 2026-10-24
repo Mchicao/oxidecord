@@ -1,15 +1,18 @@
 //! The channel list itself: one row per channel, grouped under its category.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, collapsible::Collapsible, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, collapsible::Collapsible, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use twilight_model::id::{Id, marker::ChannelMarker};
 
 use crate::discord::Channel;
 use crate::screens::home::HomeScreen;
 use crate::screens::home::channels::{ChannelGroup, channel_icon_path};
-use crate::screens::home::view::{avatar, unread_pill};
+use crate::screens::home::view::{avatar, mention_badge, unread_pill};
+use crate::ui::button::Button;
 use crate::ui::depth::{Finish, Level, Lit as _, radius};
 use crate::ui::theme;
 
@@ -42,9 +45,12 @@ impl HomeScreen {
         };
         let unread = self.shows_unread(channel);
         let muted = self.unreads.is_muted(channel_id, channel.parent_id);
+        let mentions = self.unreads.mentions(channel_id);
+        let group = SharedString::from(format!("channel-{channel_id}"));
 
         h_flex()
             .id(("channel", channel_id.get()))
+            .group(group.clone())
             .relative()
             .px_2()
             .py(px(5.))
@@ -80,18 +86,47 @@ impl HomeScreen {
                     .size_4(),
             )
             .child(div().flex_1().truncate().child(channel.name.clone()))
+            .children(mention_badge(mentions, cx))
+            .when(is_voice, |this| {
+                this.child(self.voice_chat_button(channel_id, is_selected, group, cx))
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 if is_voice {
-                    this.join_voice_channel(channel_id, cx);
+                    this.join_voice_channel(channel_id, window, cx);
                 } else {
                     this.select_channel(channel_id, window, cx);
                 }
             }))
     }
 
+    /// Opens a voice channel's text chat without joining it. Shown on hover,
+    /// and on the channel the user is in, as Discord does.
+    fn voice_chat_button(
+        &self,
+        channel_id: Id<ChannelMarker>,
+        joined: bool,
+        group: SharedString,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        Button::new(("voice-chat", channel_id.get()))
+            .icon(Icon::default().path("icons/message-circle.svg"))
+            .ghost()
+            .xsmall()
+            .tooltip("Open Chat")
+            .when(!joined, |this| {
+                this.opacity(0.)
+                    .group_hover(group, |style| style.opacity(1.))
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // The row under it would join the channel.
+                cx.stop_propagation();
+                this.open_voice_chat(channel_id, window, cx);
+            }))
+    }
+
     /// Whether a channel shows as unread: it has something new, and isn't
-    /// muted. Voice channels' text chats are left out, since the app can't
-    /// open them to read them.
+    /// muted. Voice channels' text chats are left out, as Discord leaves them
+    /// out of its unread markers.
     fn shows_unread(&self, channel: &Channel) -> bool {
         !channel.kind.is_voice()
             && self.unreads.is_unread(channel.id)
@@ -225,10 +260,13 @@ impl HomeScreen {
             );
 
         // Like Discord, keep the selected channel and the unread ones visible
-        // when their category is collapsed.
+        // when their category is collapsed, and any that pinged the user even
+        // if muted.
         if collapsed {
             for channel in group.channels.iter().filter(|channel| {
-                Some(channel.id) == self.selected_channel || self.shows_unread(channel)
+                Some(channel.id) == self.selected_channel
+                    || self.shows_unread(channel)
+                    || self.unreads.mentions(channel.id) > 0
             }) {
                 collapsible = collapsible.child(self.render_channel_row(channel, cx));
             }

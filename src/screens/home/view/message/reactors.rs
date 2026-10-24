@@ -5,11 +5,11 @@
 //! re-render as it fills. A cache entry is dropped when its reaction changes,
 //! so each of them asks for the list again whenever it finds it missing.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, spinner::Spinner, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;

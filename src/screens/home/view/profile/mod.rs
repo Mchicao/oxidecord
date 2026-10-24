@@ -5,7 +5,7 @@ mod card;
 
 pub(super) use card::CARD_WIDTH;
 
-use gpui::*;
+use gpui_kit::*;
 
 use crate::screens::home::HomeScreen;
 

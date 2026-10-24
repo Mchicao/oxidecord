@@ -10,8 +10,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::*;
-use gpui_component::slider::{SliderEvent, SliderState};
+use gpui_kit::component::slider::{SliderEvent, SliderState};
+use gpui_kit::*;
 use image::{Frame, ImageBuffer};
 
 use crate::platform::video::{VideoEvent, VideoFrame, VideoPlayer};

@@ -191,6 +191,8 @@ pub(super) struct MessageAckPayload {
     pub(super) message_id: Id<MessageMarker>,
     #[serde(default)]
     pub(super) manual: bool,
+    #[serde(default)]
+    pub(super) mention_count: Option<u32>,
 }
 
 /// `CHANNEL_UNREAD_UPDATE`, `PASSIVE_UPDATE_V1`, and `PASSIVE_UPDATE_V2`,

@@ -11,8 +11,8 @@
 
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Theme, ThemeConfig, ThemeRegistry, ThemeSet};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeConfig, ThemeRegistry, ThemeSet};
+use gpui_kit::*;
 
 use crate::platform::prefs;
 
@@ -40,7 +40,7 @@ impl Global for Themes {}
 
 /// Parses the baked-in themes and restores the last chosen one.
 ///
-/// Must run after `gpui_component::init`, which installs the [`Theme`] and
+/// Must run after `gpui_kit::component::init`, which installs the [`Theme`] and
 /// [`ThemeRegistry`] globals this builds on.
 pub fn init(cx: &mut App) {
     // The built-in light and dark themes first, so there's always a way back to
@@ -76,7 +76,7 @@ pub fn init(cx: &mut App) {
 
     // Without a stored choice, Zinc — the palette the rest of the UI is designed
     // around — in whichever mode the system appearance picked during
-    // `gpui_component::init`.
+    // `gpui_kit::component::init`.
     let name = prefs::load().theme.unwrap_or_else(|| {
         let mode = if Theme::global(cx).mode.is_dark() {
             "Dark"
@@ -143,7 +143,7 @@ fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) {
 mod tests {
     // Named imports rather than a glob: `use super::*` would pull in gpui's own
     // `test` attribute macro over the standard one.
-    use gpui_component::ThemeSet;
+    use gpui_kit::component::ThemeSet;
 
     use super::PRESET_THEME_FILES;
 

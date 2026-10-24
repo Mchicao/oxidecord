@@ -1,7 +1,7 @@
 //! The gateway connection that keeps the open conversation live, and the call
 //! events that ride alongside it.
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::Id;
 
 use crate::discord;
@@ -153,18 +153,20 @@ impl HomeScreen {
                 // Discord acks a sender's own message for them.
                 if Some(incoming.message.author_id) == self.self_user_id {
                     self.unreads.ack(incoming.channel_id, incoming.message.id);
+                } else if self.pings_me(incoming.channel_id, incoming.guild_id, &incoming.message) {
+                    self.unreads.note_mention(incoming.channel_id);
                 }
                 if incoming.guild_id.is_none() {
                     self.note_dm_activity(incoming.channel_id, incoming.message.id, cx);
                 }
                 self.stop_typing(incoming.channel_id, incoming.message.author_id, cx);
                 self.history_cache
-                    .push(incoming.channel_id, incoming.message.clone());
+                    .push(incoming.channel_id, &incoming.message);
                 self.handle_incoming_message(incoming, cx)
             }
             discord::GatewayEvent::MessageUpdate(incoming) => {
                 self.history_cache
-                    .edit(incoming.channel_id, incoming.message.clone());
+                    .edit(incoming.channel_id, &incoming.message);
                 self.handle_message_update(incoming, cx)
             }
             discord::GatewayEvent::MessageDelete {
@@ -252,11 +254,16 @@ impl HomeScreen {
                 channel_id,
                 message_id,
                 manual,
+                mention_count,
             } => {
                 if manual {
-                    self.unreads.set_acked(channel_id, message_id);
+                    let mentions = mention_count.unwrap_or(self.unreads.mentions(channel_id));
+                    self.unreads.set_acked(channel_id, message_id, mentions);
                 } else {
                     self.unreads.ack(channel_id, message_id);
+                    if let Some(mentions) = mention_count {
+                        self.unreads.set_mentions(channel_id, mentions);
+                    }
                 }
                 cx.notify();
             }
@@ -312,7 +319,11 @@ impl HomeScreen {
         incoming: discord::IncomingMessage,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_channel != Some(incoming.channel_id) {
+        // Open on a voice channel with its chat closed, what's loaded is
+        // whichever conversation was open before, not this one.
+        if self.selected_channel != Some(incoming.channel_id)
+            || self.messages_channel != Some(incoming.channel_id)
+        {
             return;
         }
         // The history for this channel is still loading and will replace the
@@ -330,8 +341,9 @@ impl HomeScreen {
         // The echo of a message sent from here takes the place of its pending
         // copy.
         if let Some(nonce) = incoming.nonce.and_then(Id::new_checked)
-            && self.confirm_pending_message(nonce, incoming.message.clone())
+            && self.has_pending_message(nonce)
         {
+            self.confirm_pending_message(nonce, incoming.message);
             cx.notify();
             return;
         }

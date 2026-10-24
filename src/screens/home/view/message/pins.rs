@@ -1,9 +1,9 @@
 //! The pinned-messages popout, opened from the conversation header's pin
 //! button.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, spinner::Spinner, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, spinner::Spinner, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::discord;
 use crate::screens::home::HomeScreen;

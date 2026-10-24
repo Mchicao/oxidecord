@@ -1,16 +1,16 @@
 //! Modal dialogs shared across screens, plus the backdrop drawn behind them.
 //!
-//! Dialogs are opened through gpui-component's [`Root`](gpui_component::Root),
+//! Dialogs are opened through gpui-component's [`Root`](gpui_kit::component::Root),
 //! which draws them over the whole window; [`with_dialog_layer`] pushes the
 //! content behind them back, so a modal reads as being in front of the app
 //! rather than floating somewhere inside it.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, WindowExt as _, button::ButtonVariant,
     dialog::DialogButtonProps, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::ui::depth;
 

@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::*;
+use gpui_kit::*;
 
 /// Fraction of the distance still owed handed over each frame. Every frame of a
 /// glide costs a full redraw, so this is a CPU knob as much as a feel one: 0.4
@@ -33,12 +33,16 @@ const DIRECT_LINES: f32 = 1.0;
 enum Surface {
     Div(ScrollHandle),
     List(ListState),
+    /// Scrolls as a div does: the list moves its `base_handle`. Kept whole for
+    /// the list's `.track_scroll()`.
+    UniformList(UniformListScrollHandle),
 }
 
 impl Surface {
     fn offset(&self) -> Pixels {
         match self {
             Self::Div(handle) => handle.offset().y,
+            Self::UniformList(handle) => handle.0.borrow().base_handle.offset().y,
             // A bottom-aligned list parks its anchor one item past the last one,
             // and this getter reports that anchor's top: the full content
             // height, a viewport short of the bottom it's actually drawn at.
@@ -53,6 +57,10 @@ impl Surface {
     fn set_offset(&self, y: Pixels) {
         match self {
             Self::Div(handle) => handle.set_offset(point(handle.offset().x, y)),
+            Self::UniformList(handle) => {
+                let handle = &handle.0.borrow().base_handle;
+                handle.set_offset(point(handle.offset().x, y));
+            }
             // Repins a bottom-aligned list when it lands at the bottom, which is
             // what makes new messages follow along.
             Self::List(state) => state.set_offset_from_scrollbar(point(px(0.), y)),
@@ -62,6 +70,7 @@ impl Surface {
     fn min_offset(&self) -> Pixels {
         match self {
             Self::Div(handle) => -handle.max_offset().y,
+            Self::UniformList(handle) => -handle.0.borrow().base_handle.max_offset().y,
             // Has to match the setter's own clamp to the last float, or a target
             // of `min_offset` stops short of the bottom and the list never
             // repins. It only does while the list element carries no padding:
@@ -93,6 +102,10 @@ impl SmoothScroll {
         Self::new(Surface::List(state))
     }
 
+    pub fn uniform_list() -> Self {
+        Self::new(Surface::UniformList(UniformListScrollHandle::new()))
+    }
+
     fn new(surface: Surface) -> Self {
         Self {
             surface,
@@ -106,7 +119,35 @@ impl SmoothScroll {
         match &self.surface {
             Surface::Div(handle) => handle,
             Surface::List(_) => unreachable!("list surfaces are tracked by their ListState"),
+            Surface::UniformList(_) => unreachable!("see `uniform_handle`"),
         }
+    }
+
+    /// For a uniform list's `.track_scroll()`. Uniform list surfaces only.
+    pub fn uniform_handle(&self) -> &UniformListScrollHandle {
+        match &self.surface {
+            Surface::UniformList(handle) => handle,
+            _ => unreachable!("only uniform lists track a UniformListScrollHandle"),
+        }
+    }
+
+    /// Where the container is drawn this frame.
+    pub fn offset(&self) -> Pixels {
+        self.current
+    }
+
+    /// Eases toward `y` as a wheel notch would: for a jump the user asked for.
+    /// The caller notifies the view, whose next render starts the glide.
+    pub fn glide_to(&mut self, y: Pixels) {
+        self.target = y.clamp(self.surface.min_offset(), px(0.));
+    }
+
+    /// Moves to `y` at once, ending any glide: for content that's been
+    /// replaced, where easing from the old position would show nothing real.
+    pub fn jump_to(&mut self, y: Pixels) {
+        self.current = y.clamp(self.surface.min_offset().min(px(0.)), px(0.));
+        self.target = self.current;
+        self.surface.set_offset(self.current);
     }
 
     /// Advance the glide one frame, asking for another while distance remains.
@@ -203,7 +244,7 @@ fn request_step(view: EntityId, due: Instant, window: &Window) {
 #[cfg(test)]
 mod tests {
     use super::{advance, wheel_delta};
-    use gpui::{ScrollDelta, point, px};
+    use gpui_kit::{ScrollDelta, point, px};
 
     #[test]
     fn a_glide_spreads_the_distance_then_lands_exactly() {

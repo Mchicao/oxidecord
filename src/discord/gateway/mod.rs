@@ -166,6 +166,9 @@ pub enum GatewayEvent {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
         manual: bool,
+        /// The channel's unread mentions, when the ack changed them. Left out,
+        /// they stand as they were.
+        mention_count: Option<u32>,
     },
     /// A guild's channels that count toward its unread mark, from `READY` or
     /// `GUILD_CREATE`. Replaces what was known of the guild.

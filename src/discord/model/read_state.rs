@@ -26,6 +26,8 @@ const DISCORD_EPOCH_MS: i64 = 1_420_070_400_000;
 pub struct ReadState {
     pub channel_id: Id<ChannelMarker>,
     pub last_message_id: Id<MessageMarker>,
+    /// How many unread messages ping the user.
+    pub mention_count: u32,
 }
 
 /// The newest message in a channel.
@@ -57,6 +59,10 @@ pub struct MuteSettings {
     pub guild_id: Option<Id<GuildMarker>>,
     pub muted: bool,
     pub muted_channels: Vec<Id<ChannelMarker>>,
+    /// Whether `@everyone` and `@here` don't count as pinging the user.
+    pub suppress_everyone: bool,
+    /// Whether mentions of the user's roles don't count as pinging them.
+    pub suppress_roles: bool,
 }
 
 /// One entry of `READY`'s `read_state`. Only channel read states (type 0) are
@@ -69,6 +75,8 @@ pub(in crate::discord) struct RawReadState {
     read_state_type: u8,
     #[serde(default, deserialize_with = "snowflake")]
     last_message_id: Option<Id<MessageMarker>>,
+    #[serde(default)]
+    mention_count: Option<u32>,
 }
 
 /// A channel's newest message, as `CHANNEL_UNREAD_UPDATE` and the passive
@@ -110,6 +118,10 @@ pub(in crate::discord) struct RawGuildSettings {
     muted: bool,
     #[serde(default)]
     mute_config: Option<RawMuteConfig>,
+    #[serde(default)]
+    suppress_everyone: bool,
+    #[serde(default)]
+    suppress_roles: bool,
     #[serde(default, deserialize_with = "versioned_list")]
     channel_overrides: Vec<RawChannelOverride>,
 }
@@ -174,6 +186,7 @@ pub(in crate::discord) fn convert_read_states(states: Vec<RawReadState>) -> Vec<
             Some(ReadState {
                 channel_id: state.id,
                 last_message_id: state.last_message_id?,
+                mention_count: state.mention_count.unwrap_or(0),
             })
         })
         .collect()
@@ -299,6 +312,8 @@ pub(in crate::discord) fn convert_mute_settings(settings: RawGuildSettings) -> M
             .filter(|channel| in_force(channel.muted, channel.mute_config.as_ref()))
             .map(|channel| channel.channel_id)
             .collect(),
+        suppress_everyone: settings.suppress_everyone,
+        suppress_roles: settings.suppress_roles,
     }
 }
 

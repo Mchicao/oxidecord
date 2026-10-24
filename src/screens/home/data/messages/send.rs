@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::*;
+use gpui_kit::*;
 use twilight_model::id::{Id, marker::MessageMarker};
 
 use crate::discord;
@@ -166,6 +166,15 @@ impl HomeScreen {
         // The confirmed copy can be taller: its images and embeds.
         self.splice_messages(ix..ix + 1, 1);
         true
+    }
+
+    pub(in crate::screens::home) fn has_pending_message(
+        &self,
+        pending_id: Id<MessageMarker>,
+    ) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.id == pending_id && message.delivery != discord::Delivery::Sent)
     }
 
     fn pending_message_mut(

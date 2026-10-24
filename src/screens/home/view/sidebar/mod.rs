@@ -4,8 +4,8 @@ mod channel_list;
 mod channels;
 mod dms;
 
-use gpui::*;
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::*;
 
 /// The chrome both sidebars share: a titled header over the scrolling list,
 /// with the account panel pinned below.
