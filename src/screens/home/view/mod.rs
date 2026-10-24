@@ -35,6 +35,9 @@ impl Render for HomeScreen {
         ] {
             scroll.step(window);
         }
+        if let Some(picker) = &mut self.emoji_picker {
+            picker.scroll.step(window);
+        }
         // After the glide's step, so it reads where this frame draws the list.
         self.sync_at_bottom(cx);
 

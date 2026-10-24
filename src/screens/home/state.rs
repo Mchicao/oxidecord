@@ -26,7 +26,7 @@ use crate::ui::smooth_scroll::SmoothScroll;
 use super::autocomplete::{Suggestion, Trigger};
 use super::channels::ChannelGroup;
 use super::data::attachments::PendingAttachment;
-use super::emoji::PickerRow;
+use super::emoji::{PickerLayout, SectionKind};
 use super::folders::RailEntry;
 use super::history_cache::HistoryCache;
 use super::unread::Unreads;
@@ -146,10 +146,14 @@ pub(super) struct EmojiPicker {
     /// The list as last laid out. Rebuilt when the search changes rather than
     /// every frame — the screen repaints for every video frame, and this is a
     /// couple of thousand emoji.
-    pub rows: Rc<Vec<PickerRow>>,
+    pub layout: Rc<PickerLayout>,
+    /// Sections folded down to their header, by the chevron beside it.
+    pub collapsed: HashSet<SectionKind>,
     /// The emoji under the pointer, named in the footer.
     pub hovered: Option<super::emoji::PickerEmoji>,
-    pub scroll: UniformListScrollHandle,
+    pub scroll: SmoothScroll,
+    /// The category rail down the picker's left side.
+    pub rail_scroll: ScrollHandle,
     pub _search_changed: Subscription,
 }
 

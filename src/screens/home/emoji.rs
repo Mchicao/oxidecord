@@ -4,8 +4,10 @@
 //! Which custom emoji the user may send is decided by the caller; this module
 //! only lays out and searches what it's handed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+
+use twilight_model::id::{Id, marker::GuildMarker};
 
 use crate::discord::GuildEmoji;
 use crate::platform::prefs::RecentEmoji;
@@ -48,38 +50,77 @@ impl PickerEmoji {
     }
 }
 
+/// Which run of emoji a section is, and what stands for it in the picker's
+/// category rail. Also how a collapsed section is remembered.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::screens::home) enum SectionKind {
+    Recent,
+    Guild(Id<GuildMarker>),
+    Unicode(emojis::Group),
+}
+
 /// A titled run of emoji: one guild's, or one unicode category.
 pub(in crate::screens::home) struct PickerSection {
+    pub kind: SectionKind,
     pub title: String,
+    /// A guild's icon, drawn in the rail and beside the header.
+    pub icon: Option<String>,
     pub emojis: Vec<PickerEmoji>,
+}
+
+/// A section as laid out: its header, and the list line that header is on.
+pub(in crate::screens::home) struct SectionHeader {
+    pub kind: SectionKind,
+    pub title: String,
+    pub icon: Option<String>,
+    pub first_row: usize,
+    pub collapsed: bool,
 }
 
 /// A line of the picker's list. Headers take a whole line so the list stays
 /// uniform in height and can be virtualized.
 pub(in crate::screens::home) enum PickerRow {
-    Header(String),
+    /// Index into [`PickerLayout::sections`].
+    Header(usize),
     Emojis(Vec<PickerEmoji>),
+}
+
+#[derive(Default)]
+pub(in crate::screens::home) struct PickerLayout {
+    pub sections: Vec<SectionHeader>,
+    pub rows: Vec<PickerRow>,
+}
+
+impl PickerLayout {
+    /// The section showing at list line `row`: the last to start at or before it.
+    pub fn section_at(&self, row: usize) -> Option<usize> {
+        self.sections
+            .iter()
+            .rposition(|section| section.first_row <= row)
+    }
 }
 
 /// The unicode categories, filtered to what the system font can draw. Built
 /// once: the emoji crate's table is static, so this never changes.
-static UNICODE: LazyLock<Vec<(&'static str, Vec<&'static emojis::Emoji>)>> = LazyLock::new(|| {
-    emojis::Group::iter()
-        .map(|group| {
-            let emojis = group
-                .emojis()
-                .filter(|emoji| emoji.emoji_version() <= NEWEST_EMOJI)
-                .collect();
-            (group_title(group), emojis)
-        })
-        .collect()
-});
+#[allow(clippy::type_complexity)]
+static UNICODE: LazyLock<Vec<(emojis::Group, &'static str, Vec<&'static emojis::Emoji>)>> =
+    LazyLock::new(|| {
+        emojis::Group::iter()
+            .map(|group| {
+                let emojis = group
+                    .emojis()
+                    .filter(|emoji| emoji.emoji_version() <= NEWEST_EMOJI)
+                    .collect();
+                (group, group_title(group), emojis)
+            })
+            .collect()
+    });
 
 /// Every unicode emoji the system font can draw, in picker order.
 pub(in crate::screens::home) fn unicode_emojis() -> impl Iterator<Item = &'static emojis::Emoji> {
     UNICODE
         .iter()
-        .flat_map(|(_, emojis)| emojis.iter().copied())
+        .flat_map(|(_, _, emojis)| emojis.iter().copied())
 }
 
 fn group_title(group: emojis::Group) -> &'static str {
@@ -101,19 +142,25 @@ fn group_title(group: emojis::Group) -> &'static str {
 /// every unicode category, all narrowed to `query` (matched against names and
 /// shortcodes, ignoring case). Sections left empty by the search are dropped,
 /// and the recently used are left out of a search, which would only repeat
-/// them.
+/// them. A `collapsed` section keeps only its header, except during a search,
+/// where that would hide matches behind a header that says nothing of them.
 pub(in crate::screens::home) fn picker_rows(
     recent: Vec<PickerEmoji>,
     custom: Vec<PickerSection>,
     query: &str,
-) -> Vec<PickerRow> {
+    collapsed: &HashSet<SectionKind>,
+) -> PickerLayout {
     let query = query.trim().to_lowercase();
     let recent = query.is_empty().then(|| PickerSection {
+        kind: SectionKind::Recent,
         title: "Recently Used".into(),
+        icon: None,
         emojis: recent,
     });
-    let unicode = UNICODE.iter().map(|(title, emojis)| PickerSection {
+    let unicode = UNICODE.iter().map(|(group, title, emojis)| PickerSection {
+        kind: SectionKind::Unicode(*group),
         title: title.to_string(),
+        icon: None,
         emojis: emojis
             .iter()
             .filter(|emoji| unicode_matches(emoji, &query))
@@ -121,7 +168,7 @@ pub(in crate::screens::home) fn picker_rows(
             .collect(),
     });
 
-    let mut rows = Vec::new();
+    let mut layout = PickerLayout::default();
     for mut section in recent.into_iter().chain(custom).chain(unicode) {
         if !query.is_empty() {
             section.emojis.retain(|emoji| match emoji {
@@ -133,15 +180,25 @@ pub(in crate::screens::home) fn picker_rows(
         if section.emojis.is_empty() {
             continue;
         }
-        rows.push(PickerRow::Header(section.title));
-        rows.extend(
-            section
-                .emojis
-                .chunks(COLUMNS)
-                .map(|chunk| PickerRow::Emojis(chunk.to_vec())),
-        );
+        let is_collapsed = query.is_empty() && collapsed.contains(&section.kind);
+        layout.rows.push(PickerRow::Header(layout.sections.len()));
+        layout.sections.push(SectionHeader {
+            kind: section.kind,
+            title: section.title,
+            icon: section.icon,
+            first_row: layout.rows.len() - 1,
+            collapsed: is_collapsed,
+        });
+        if !is_collapsed {
+            layout.rows.extend(
+                section
+                    .emojis
+                    .chunks(COLUMNS)
+                    .map(|chunk| PickerRow::Emojis(chunk.to_vec())),
+            );
+        }
     }
-    rows
+    layout
 }
 
 fn unicode_matches(emoji: &emojis::Emoji, query: &str) -> bool {
@@ -304,16 +361,33 @@ mod tests {
     #[test]
     fn search_drops_empty_sections() {
         let custom = vec![PickerSection {
+            kind: SectionKind::Guild(Id::new(1)),
             title: "Guild".into(),
+            icon: None,
             emojis: vec![PickerEmoji::Custom {
                 emoji: emoji(1, "wave", false),
                 locked: None,
             }],
         }];
-        let rows = picker_rows(Vec::new(), custom, "WAVE");
-        assert!(matches!(&rows[0], PickerRow::Header(title) if title == "Guild"));
+        let layout = picker_rows(Vec::new(), custom, "WAVE", &HashSet::new());
+        assert!(matches!(layout.rows[0], PickerRow::Header(0)));
+        assert_eq!(layout.sections[0].title, "Guild");
         // The unicode waving hand matches too.
-        assert!(rows.len() > 2);
-        assert!(picker_rows(Vec::new(), Vec::new(), "zzzzqqq").is_empty());
+        assert!(layout.rows.len() > 2);
+        let none = picker_rows(Vec::new(), Vec::new(), "zzzzqqq", &HashSet::new());
+        assert!(none.rows.is_empty());
+    }
+
+    #[test]
+    fn collapsed_sections_keep_their_header() {
+        let smileys = SectionKind::Unicode(emojis::Group::SmileysAndEmotion);
+        let layout = picker_rows(Vec::new(), Vec::new(), "", &HashSet::from([smileys]));
+        assert!(layout.sections[0].collapsed);
+        assert_eq!(layout.sections[1].first_row, 1);
+        assert_eq!(layout.section_at(0), Some(0));
+        assert_eq!(layout.section_at(2), Some(1));
+        // A search shows its matches regardless.
+        let search = picker_rows(Vec::new(), Vec::new(), "grin", &HashSet::from([smileys]));
+        assert!(!search.sections[0].collapsed);
     }
 }
