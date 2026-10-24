@@ -285,7 +285,11 @@ pub struct HomeScreen {
     pub(super) selected_guild: Option<Id<GuildMarker>>,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
+    /// Set through `set_channel_groups`, which keeps `channel_index` in step.
     pub(super) channel_groups: Vec<ChannelGroup>,
+    /// Where each of `channel_groups`' channels sits in it, as (group,
+    /// channel) indices: channels are looked up by id for every message drawn.
+    pub(super) channel_index: HashMap<Id<ChannelMarker>, (usize, usize)>,
     /// Every guild's channels as far as they're known: from the gateway,
     /// which sends them all with `READY`, or from a fetch where it hasn't
     /// yet. Opening a guild draws its list from here at once.
@@ -549,6 +553,7 @@ impl HomeScreen {
             loading: true,
             error: None,
             channel_groups: Vec::new(),
+            channel_index: HashMap::new(),
             guild_channels: HashMap::new(),
             stale_guild_channels: HashSet::new(),
             fetching_guild_channels: HashSet::new(),
