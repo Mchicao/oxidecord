@@ -15,7 +15,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _, avatar::Avatar, h_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{HomeScreen, MarkConversationRead, View};
+use super::{HOME_CONTEXT, HomeScreen, MarkConversationRead, View};
 use crate::ui::depth;
 
 const MESSAGE_PADDING_X: f32 = 16.;
@@ -79,6 +79,7 @@ impl Render for HomeScreen {
             // The rail and sidebar sit straight on the window; the conversation
             // is a panel lifted off it (see `inset`).
             .bg(cx.theme().sidebar)
+            .key_context(HOME_CONTEXT)
             .on_action(cx.listener(Self::on_paste_attachment))
             .on_action(cx.listener(Self::on_edit_last_message))
             .on_action(cx.listener(|this, _: &MarkConversationRead, window, cx| {

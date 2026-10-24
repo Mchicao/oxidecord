@@ -168,7 +168,17 @@ impl HomeScreen {
         // as hovering, though it hangs over the row above.
         let message_id = message.id;
         let group_name = SharedString::from(format!("message-{}", message_id.get()));
-        let mention_tint = theme.warning;
+        // The message being replied to wears the reply's color over any
+        // mention tint, as in Discord, so it's clear what the reply is for.
+        let replying = self
+            .replying_to
+            .as_ref()
+            .is_some_and(|target| target.message_id == message_id);
+        let tint = if replying {
+            Some(theme.primary)
+        } else {
+            mentioned.then_some(theme.warning)
+        };
         let lit = self.toolbar_shown(message_id);
         let row = div()
             .id(("message", message_id.get()))
@@ -184,25 +194,24 @@ impl HomeScreen {
                 }
                 cx.notify();
             }))
-            .map(|this| {
-                if mentioned {
-                    // A mention keeps its tint under the pointer, only deeper,
-                    // so hovering doesn't hide which messages were for you.
-                    this.bg(mention_tint.opacity(if lit { 0.16 } else { 0.1 }))
-                        .hover(|this| this.bg(mention_tint.opacity(0.16)))
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left_0()
-                                .w(px(MENTION_BAR_WIDTH))
-                                .bg(mention_tint),
-                        )
-                } else {
-                    this.when(lit, |this| this.bg(theme.accent.opacity(0.4)))
-                        .hover(|this| this.bg(theme.accent.opacity(0.4)))
-                }
+            .map(|this| match tint {
+                // A tint stays under the pointer, only deeper, so hovering
+                // doesn't hide which messages were for you.
+                Some(tint) => this
+                    .bg(tint.opacity(if lit { 0.16 } else { 0.1 }))
+                    .hover(|this| this.bg(tint.opacity(0.16)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(MENTION_BAR_WIDTH))
+                            .bg(tint),
+                    ),
+                None => this
+                    .when(lit, |this| this.bg(theme.accent.opacity(0.4)))
+                    .hover(|this| this.bg(theme.accent.opacity(0.4))),
             })
             // A message open for editing stays lit while the pointer is
             // elsewhere, so it's clear which one the box belongs to.
