@@ -261,6 +261,19 @@ pub(super) struct VideoPlayback {
     pub scrubber: Entity<SliderState>,
 }
 
+/// The message list, drawn as a view of its own so the window can replay it
+/// from the last frame. It redraws whenever the screen is notified, as it
+/// would inline, but not when something animating in a view of its own (the
+/// typing dots) redraws around it — which would otherwise rebuild every
+/// visible message each frame.
+pub(super) struct MessageListView {
+    pub(super) screen: WeakEntity<HomeScreen>,
+}
+
+/// The typing indicator's pulsing dots. A view of their own, since an
+/// animation redraws the view it's drawn in on every frame.
+pub(super) struct TypingDots;
+
 pub struct HomeScreen {
     pub(super) view: View,
     pub(super) guilds: Vec<Guild>,
@@ -488,6 +501,8 @@ pub struct HomeScreen {
     pub(super) member_searches: HashSet<(Id<GuildMarker>, String)>,
     pub(super) _composer_changed: Subscription,
     pub(super) messages_list: ListState,
+    pub(super) message_list_view: Entity<MessageListView>,
+    pub(super) typing_dots: Entity<TypingDots>,
     pub(super) video: Option<VideoPlayback>,
     /// Owns the decoded bitmaps for the currently displayed messages' images.
     /// Cleared on channel switch so image memory doesn't grow without bound.
@@ -539,6 +554,15 @@ impl HomeScreen {
                 }
             });
         });
+
+        let screen = cx.entity();
+        let message_list_view = cx.new(|cx| {
+            cx.observe(&screen, |_, _, cx| cx.notify()).detach();
+            MessageListView {
+                screen: screen.downgrade(),
+            }
+        });
+        let typing_dots = cx.new(|_| TypingDots);
 
         let mut this = Self {
             view: View::Guild,
@@ -635,6 +659,8 @@ impl HomeScreen {
             _composer_changed: composer_changed,
             messages_scroll: SmoothScroll::list(messages_list.clone()),
             messages_list,
+            message_list_view,
+            typing_dots,
             image_cache: RetainAllImageCache::new(cx),
             rail_scroll: SmoothScroll::div(),
             sidebar_scroll: SmoothScroll::div(),
