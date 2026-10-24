@@ -76,9 +76,9 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = 0
 
-# Thin rather than fat LTO: fat across gpui makes release builds crawl for little extra.
+# Thin rather than fat LTO, and the default codegen units: either of the others puts
+# the main crate's codegen on one thread, which makes release builds crawl.
 # Panics stay unwinding, since runtime::run surfaces a task's panic as a JoinError.
 [profile.release]
 lto = "thin"
-codegen-units = 1
 strip = "debuginfo"
