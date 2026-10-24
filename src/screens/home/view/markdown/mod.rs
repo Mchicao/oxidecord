@@ -8,9 +8,9 @@
 
 mod inline;
 mod rich_text;
-mod selection;
 
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,10 +20,12 @@ use gpui_kit::*;
 use twilight_model::id::{Id, marker::UserMarker};
 
 use crate::discord::{self, Block, Inline};
+use crate::screens::home::selection::{TextCopy, TextKey, TextOwner, TextPart};
 use crate::screens::home::{HomeScreen, View};
 use crate::ui::{dialogs, tooltip};
 
 use inline::{Action, Flattener, ResolvedUser};
+use rich_text::{RichText, Segment, Selectable};
 
 /// Follows the text of a message that's been edited, small and muted.
 const EDITED_MARKER: &str = "(edited)";
@@ -50,6 +52,9 @@ pub(super) struct MarkdownOptions<'a> {
     /// has a tooltip. Off where the text sits inside something clickable of
     /// its own, like a linked embed title.
     pub interactive: bool,
+    /// Which message, and which part of it, the text is, when the mouse can
+    /// select it. Only the message list's text is selectable.
+    pub selectable: Option<TextOwner>,
 }
 
 impl<'a> MarkdownOptions<'a> {
@@ -60,6 +65,7 @@ impl<'a> MarkdownOptions<'a> {
             edited: None,
             jumbo: false,
             interactive: true,
+            selectable: None,
         }
     }
 
@@ -78,6 +84,11 @@ impl<'a> MarkdownOptions<'a> {
         self.interactive = interactive;
         self
     }
+
+    pub fn selectable(mut self, message: u64, part: TextPart) -> Self {
+        self.selectable = Some(TextOwner::new(message, part));
+        self
+    }
 }
 
 struct Palette {
@@ -85,7 +96,6 @@ struct Palette {
     mention: Hsla,
     mention_background: Hsla,
     code_background: Hsla,
-    /// Behind text the mouse has dragged over.
     selection: Hsla,
     /// Opaque, since the text under a hidden spoiler is set in the same
     /// colour as its bar — anything see-through would show the glyphs.
@@ -135,6 +145,10 @@ impl<'a> Renderer<'a> {
         let on_action =
             Rc::new(
                 move |action: &Action, window: &mut Window, cx: &mut App| match action {
+                    // A drag that selected the link's text wasn't a click on it.
+                    _ if weak
+                        .read_with(cx, |this, _| this.has_text_selection())
+                        .unwrap_or(false) => {}
                     Action::Url(url) => cx.open_url(url),
                     Action::MaskedUrl(url) => dialogs::confirm_open_link(url.clone(), window, cx),
                     Action::User {
@@ -167,6 +181,9 @@ impl<'a> Renderer<'a> {
                 },
             );
 
+        if let Some(owner) = options.selectable {
+            screen.text_copies.borrow_mut().clear_part(owner);
+        }
         Self {
             screen,
             options,
@@ -181,9 +198,68 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn next_id(&self) -> ElementId {
+    /// The next text's element id, and its place in the selection's order
+    /// when it's selectable.
+    fn next_text(&self) -> (ElementId, Option<TextKey>) {
         let index = self.next_text.replace(self.next_text.get() + 1);
-        ElementId::NamedInteger(self.options.scope.clone(), index as u64)
+        (
+            ElementId::NamedInteger(self.options.scope.clone(), index as u64),
+            self.options.selectable.map(|owner| owner.key(index)),
+        )
+    }
+
+    /// Lets the mouse select `text` when it has a key, leaving what it copies
+    /// as for the selection to copy from: its text, with each custom emoji's
+    /// blank copying as the name in `emoji`.
+    fn selectable(
+        &self,
+        rich: RichText,
+        key: Option<TextKey>,
+        text: SharedString,
+        emoji: Vec<(Range<usize>, SharedString)>,
+    ) -> RichText {
+        let Some(key) = key else {
+            return rich;
+        };
+        let screen = self.screen;
+        let selected = screen
+            .text_selection
+            .as_ref()
+            .and_then(|selection| selection.range_in(key, text.len()));
+        screen
+            .text_copies
+            .borrow_mut()
+            .insert(key, TextCopy::new(text, emoji));
+        rich.selectable(Selectable {
+            key,
+            regions: screen.text_regions.clone(),
+            selected,
+            color: self.palette.selection,
+        })
+    }
+
+    /// A code block's text, in one run of the block's monospace.
+    fn code(&self, code: &str) -> RichText {
+        // gpui draws a tab as nothing at all.
+        let text: SharedString = code.replace('\t', "    ").into();
+        let segments = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![Segment {
+                len: text.len(),
+                style: HighlightStyle::default(),
+                mono: true,
+            }]
+        };
+        let (id, key) = self.next_text();
+        let rich = RichText::new(
+            id,
+            text.clone(),
+            segments,
+            self.mono_family.clone(),
+            &self.screen.image_cache,
+        );
+        self.selectable(rich, key, text, Vec::new())
     }
 
     /// The key of the next spoiler, stable across frames since the text is
@@ -307,8 +383,7 @@ impl<'a> Renderer<'a> {
                 .font_family(self.mono_family.clone())
                 .text_size(px(12.5))
                 .line_height(px(18.))
-                // gpui draws a tab as nothing at all.
-                .child(code.replace('\t', "    "))
+                .child(self.code(code))
                 .into_any_element(),
         }
     }
