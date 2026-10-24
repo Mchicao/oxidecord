@@ -25,8 +25,8 @@ pub(super) enum Hovered {
 }
 
 impl HomeScreen {
-    /// Sits at the top-right of the message, shown only while `group_name` —
-    /// the message row's hover group — is hovered.
+    /// Sits at the top-right of the message, built only while
+    /// [`toolbar_shown`](Self::toolbar_shown) holds for it.
     ///
     /// Holding shift flattens the overflow menu into the bar, in Discord's
     /// order — copy link, reply, delete — and drops the "More" button, so the
@@ -34,7 +34,6 @@ impl HomeScreen {
     pub(super) fn render_message_toolbar(
         &self,
         message: &discord::Message,
-        group_name: &SharedString,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -44,18 +43,15 @@ impl HomeScreen {
         let can_edit = menu.can_edit;
         let expanded = self.shift_held;
         let reacting = self.reacting_to(message_id);
-        let shown = self.toolbar_shown(message_id);
 
         div()
             .id(("message-toolbar", message_id.get()))
             .absolute()
             .top(px(-16.))
             .right(px(12.))
-            .invisible()
-            .group_hover(group_name.clone(), |this| this.visible())
-            // Up, it belongs to its own message: the row it overhangs mustn't
+            // It belongs to its own message: the row it overhangs mustn't
             // light up or take the pointer underneath it.
-            .when(shown, |this| this.visible().occlude())
+            .occlude()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 this.set_hovered(Hovered::Toolbar, message_id, *hovered, cx);
             }))

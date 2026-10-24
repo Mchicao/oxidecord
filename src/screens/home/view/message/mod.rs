@@ -168,7 +168,6 @@ impl HomeScreen {
         // the floating action toolbar, like Discord. Using the toolbar counts
         // as hovering, though it hangs over the row above.
         let message_id = message.id;
-        let group_name = SharedString::from(format!("message-{}", message_id.get()));
         // The message being replied to wears the reply's color over any
         // mention tint, as in Discord, so it's clear what the reply is for.
         let replying = self
@@ -183,7 +182,6 @@ impl HomeScreen {
         let lit = self.toolbar_shown(message_id);
         let row = div()
             .id(("message", message_id.get()))
-            .group(group_name.clone())
             .relative()
             .w_full()
             .min_w_0()
@@ -223,10 +221,14 @@ impl HomeScreen {
             })
             .child(inner);
         // Nothing on the toolbar or the menu applies until the server knows
-        // the message.
+        // the message. The toolbar is only built for the message it's up on:
+        // hidden on every other row, it would be dozens of elements apiece
+        // thrown away each frame.
         let row = if message.delivery == discord::Delivery::Sent {
-            let row = row.child(self.render_message_toolbar(message, &group_name, cx));
-            self.message_context_menu(row, menu::MessageMenu::new(self, message), cx)
+            let row = row.when(lit, |row| {
+                row.child(self.render_message_toolbar(message, cx))
+            });
+            self.message_context_menu(row, message_id, cx)
                 .into_any_element()
         } else {
             row.into_any_element()
