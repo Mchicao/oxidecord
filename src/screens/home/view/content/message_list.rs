@@ -96,7 +96,12 @@ impl Render for MessageListView {
                     |_, _, _| {},
                     move |viewport, (), window, _| listen_for_selection(weak, viewport, window),
                 )
+                // Pinned to the corner: left where it falls, an absolute
+                // element sits below the list, and every drag would read as
+                // one past the list's top.
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full(),
             )
             .into_any_element()
