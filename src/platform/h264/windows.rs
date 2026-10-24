@@ -7,7 +7,7 @@
 //! does. Output is NV12, converted to BGRA on the way out ([`super::Nv12`]).
 
 use std::mem::ManuallyDrop;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::Duration;
 
 use windows::Win32::Media::MediaFoundation::*;
@@ -34,22 +34,37 @@ pub(super) fn run(
     let _mf = MediaFoundation::startup()?;
     let mut decoder = Decoder::new()?;
     let mut time = 0;
+    let mut queued = None;
 
     loop {
-        let frame = match input.recv_timeout(POLL) {
-            Ok(frame) => frame,
-            Err(RecvTimeoutError::Timeout) if !control.is_stopped() => continue,
-            Err(_) => return Ok(()),
+        let frame = match queued.take() {
+            Some(frame) => frame,
+            None => match input.recv_timeout(POLL) {
+                Ok(frame) => frame,
+                Err(RecvTimeoutError::Timeout) if !control.is_stopped() => continue,
+                Err(_) => return Ok(()),
+            },
         };
         if control.is_stopped() {
             return Ok(());
         }
+        // With more already waiting, this picture would be stale by the time
+        // it's drawn. Every access unit is still decoded, since later ones
+        // refer back to it, but converting only the newest lets a viewer who
+        // fell behind catch up rather than stay behind for good.
+        let behind = match input.try_recv() {
+            Ok(next) => {
+                queued = Some(next);
+                true
+            }
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => false,
+        };
 
         decoder.feed(&frame, time)?;
         time += FRAME_HNS;
         let mut gone = false;
         decoder.drain(&mut |picture| {
-            if gone || !control.reserve_frame() {
+            if behind || gone || !control.reserve_frame() {
                 return;
             }
             let size = fit(
